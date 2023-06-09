@@ -49,13 +49,22 @@ class Annotation:
 		self.all_gt_annotations = list(color_map.keys())
 		self.old_boxes = deepcopy(boxes)
 		self.old_pred_boxes = deepcopy(pred_boxes)
-		self.boxes_to_render = boxes_to_render 		#list of box metadata in scene
-		self.box_indices = box_indices 				#name references for bounding boxes in scene
-		self.boxes_in_scene = boxes_in_scene 		#current bounding box objects in scene
-		self.volume_indices = [] 					#name references for clickable cube volumes in scene
-		self.volumes_in_scene = [] 					#current clickable cube volume objects in scene
+		self.boxes_gt_to_render = [] 		#list of box metadata in scene
+		self.boxes_pred_to_render = [] 		#list of box metadata in scene
+		self.box_gt_indices = [] 				#name references for bounding boxes in scene
+		self.box_pred_indices = [] 				#name references for bounding boxes in scene
+		self.boxes_gt_in_scene = [] 		#current bounding box objects in scene
+		self.boxes_pred_in_scene = [] 		#current bounding box objects in scene
+		self.volume_gt_indices = [] 					#name references for clickable cube volumes in scene
+		self.volume_pred_indices = [] 					#name references for clickable cube volumes in scene
+		self.volumes_gt_in_scene = [] 					#current clickable cube volume objects in scene
+		self.volumes_pred_in_scene = [] 					#current clickable cube volume objects in scene
 		self.color_map = color_map
 		self.pred_color_map = pred_color_map
+
+		# default to showing predicted data while editing
+		self.show_gt = False
+		self.show_pred = True
 
 		self.frame_num = frame_num
 		self.camera_sensors = camera_sensors
@@ -111,8 +120,27 @@ class Annotation:
 		# used for adding new annotations
 		self.new_annotation_types = []
 
+		frames_available = [entry for entry in os.scandir(os.path.join(self.lct_path, "bounding"))]
+		self.pred_frames = len(frames_available) - 1
+
+		self.propagated_gt_boxes = []
+		self.propagated_pred_boxes = []
+
+		self.label_list = []
+
+		# hardcoding to test
+		self.min_confidence = 50
+
+		self.pred_boxes = json.load(open(os.path.join(self.lct_path , "pred_bounding", str(self.frame_num), "boxes.json")))
+		if self.pred_frames > 0:
+				for box in self.pred_boxes['boxes']:
+					if box['confidence'] >= self.min_confidence:
+						bounding_box = [box['origin'], box['size'], box['rotation'], box['annotation'], box['confidence'], self.pred_color_map[box['annotation']]]
+						self.boxes_pred_to_render.append(bounding_box)
+
+		self.jump_to_vehicle()
 		#initialize the scene with transparent volumes to allow mouse interactions with boxes
-		self.create_box_scene(scene_widget, boxes_to_render, frame_extrinsic)
+		# self.create_box_scene(scene_widget, self.boxes_pred_to_render, frame_extrinsic)
 		self.average_depth = self.get_depth_average()
 
 		# calculates margins off of font size
@@ -136,19 +164,11 @@ class Annotation:
 
 		# button to center pointcloud view on vehicle
 		center_horiz = gui.Horiz()
-		center_view_button = gui.Button("Center Pointcloud View on Vehicle")
+		center_view_button = gui.Button("Center Pointcloud View on Vehicle (Save First)")
 		center_view_button.set_on_clicked(self.jump_to_vehicle)
 		#center_horiz.add_child(gui.Label("Center Pointcloud View on Vehicle"))
 		center_horiz.add_child(center_view_button)
 
-		self.label_list = []
-
-		# default to showing predicted data while editing
-		self.show_gt = False
-		self.show_pred = True
-
-		# hardcoding to test
-		self.min_confidence = 50
 		# Set up a widget to specify a minimum annotation confidence
 		confidence_select = gui.NumberEdit(gui.NumberEdit.INT)
 		confidence_select.set_limits(0,100)
@@ -169,12 +189,6 @@ class Annotation:
 		bounding_toggle_layout = gui.Horiz()
 		bounding_toggle_layout.add_child(gui.Label("Toggle Predicted or GT"))
 		bounding_toggle_layout.add_child(self.bounding_toggle)
-
-		frames_available = [entry for entry in os.scandir(os.path.join(self.lct_path, "bounding"))]
-		self.pred_frames = len(frames_available) - 1
-
-		self.propagated_gt_boxes = []
-		self.propagated_pred_boxes = []
 
 		# buttons for saving/saving as annotation changes
 		save_annotation_vert = gui.CollapsableVert("Save")
@@ -382,14 +396,25 @@ class Annotation:
 		hex = '#%02x%02x%02x' % color
 		bounding_box.color = matplotlib.colors.to_rgb(hex) #will select color from annotation type list
 		bbox_name = "bbox_" + str(self.box_count)
-		self.box_indices.append(bbox_name)
-		self.boxes_in_scene.append(bounding_box)
 
-		volume_to_add = self.add_volume(vol_params)
-		volume_name = "volume_" + str(self.box_count)
-		self.volume_indices.append(volume_name)
-		self.volumes_in_scene.append(volume_to_add)
-		volume_to_add.compute_vertex_normals()
+		if self.show_gt:
+			self.box_gt_indices.append(bbox_name)
+			self.boxes_gt_in_scene.append(bounding_box)
+			volume_to_add = self.add_volume(vol_params)
+			volume_name = "volume_" + str(self.box_count)
+			self.volume_gt_indices.append(volume_name)
+			self.volumes_gt_in_scene.append(volume_to_add)
+			volume_to_add.compute_vertex_normals()
+		else:
+			self.box_pred_indices.append(bbox_name)
+			self.boxes_pred_in_scene.append(bounding_box)
+			volume_to_add = self.add_volume(vol_params)
+			volume_name = "volume_" + str(self.box_count)
+			self.volume_pred_indices.append(volume_name)
+			self.volumes_pred_in_scene.append(volume_to_add)
+			volume_to_add.compute_vertex_normals()
+
+		
 
 		# TODO: change the coordinate frame of metadata from global to ego
 		#simulates reversing the extrinsic transform and rotation to get the correct location of the object according
@@ -401,11 +426,18 @@ class Annotation:
 		result = Quaternion(matrix=box_to_rotate.R)
 		size_flipped = [size[1], size[0], size[2]] #flip the x and y scale back
 		if self.show_gt:
-			box_object_data = self.create_box_metadata(box_to_rotate.center, size_flipped, result.elements, self.all_pred_annotations[0], 101, "", 0, {"propagate": True,})
-			self.temp_boxes['boxes'].append(box_object_data)
+			box = self.create_box_metadata(box_to_rotate.center, size_flipped, result.elements, self.all_pred_annotations[0], 101, "", 0, {"propagate": True,})
+			self.temp_boxes['boxes'].append(box)
+			bounding_box = [box['origin'], box['size'], box['rotation'], box['annotation'],
+							box['confidence'], self.color_map[box['annotation']]]
+			self.boxes_gt_to_render.append(bounding_box)
 		else:
-			box_object_data = self.create_box_metadata(box_to_rotate.center, size_flipped, result.elements, self.all_pred_annotations[0], 51, "", 0, {"propagate": True,}) # TODO: change confidence
-			self.temp_pred_boxes['boxes'].append(box_object_data)
+			box = self.create_box_metadata(box_to_rotate.center, size_flipped, result.elements, self.all_pred_annotations[0], 51, "", 0, {"propagate": True,}) # TODO: change confidence
+			self.temp_pred_boxes['boxes'].append(box)
+			bounding_box = [box['origin'], box['size'], box['rotation'], box['annotation'],
+							box['confidence'], self.pred_color_map[box['annotation']]]
+			self.boxes_pred_to_render.append(bounding_box)
+
 		self.scene_widget.scene.add_geometry(bbox_name, bounding_box, self.line_mat) #Adds the box to the scene
 		self.scene_widget.scene.add_geometry(volume_name, volume_to_add, self.transparent_mat)#Adds the volume
 		self.box_selected = bbox_name
@@ -442,13 +474,18 @@ class Annotation:
 			#simple shortest distance comparison from pointer to box center points
 			#searches using x and y coordinates because using z coord makes behavior unpredictable
 			def get_nearest(world_coords):
-				boxes = self.volumes_in_scene
+				if self.show_gt:
+					boxes = self.volumes_gt_in_scene
+				else:
+					boxes = self.volumes_pred_in_scene
+					print("boxes", len(boxes))
 				if len(boxes) != 0:
 					flat_coords_world = np.array([world_coords[0], world_coords[1], self.average_depth])
 					curr_coords_box = boxes[0].get_center()
 					flat_coords_box = np.array([curr_coords_box[0], curr_coords_box[1], self.average_depth])
 					smallest_dist = np.linalg.norm(flat_coords_world - flat_coords_box)
 					closest_box = boxes[0]
+					print("closest_box", closest_box)
 
 					for box in boxes:
 						curr_coords_box = box.get_center()
@@ -457,10 +494,18 @@ class Annotation:
 						if curr_dist < smallest_dist:
 							smallest_dist = curr_dist
 							closest_box = box
-
-					closest_index = boxes.index(closest_box) #get the array position of closest_box
-					self.box_selected = self.box_indices[closest_index]
-					self.select_box(closest_index) #select the nearest box
+					print("closest_box", closest_box)
+					
+					if self.show_gt:
+						closest_index = boxes.index(closest_box) #get the array position of closest_box
+						self.box_selected = self.box_gt_indices[closest_index]
+						self.select_box(closest_index) #select the nearest box
+					else:
+						closest_index = boxes.index(closest_box)
+						print("closest_index", closest_index)
+						print(len(self.box_pred_indices))
+						self.box_selected = self.box_pred_indices[closest_index]
+						self.select_box(closest_index)
 
 			widget.scene.scene.render_to_depth_image(get_depth)
 			return gui.Widget.EventCallbackResult.HANDLED
@@ -469,10 +514,18 @@ class Annotation:
 		elif event.is_modifier_down(gui.KeyModifier.SHIFT) and self.previous_index != -1:
 			current_box = self.previous_index
 			scene_camera = self.scene_widget.scene.camera
-			volume_to_drag = self.volumes_in_scene[current_box]
-			volume_name = self.volume_indices[current_box]
-			box_to_drag = self.boxes_in_scene[current_box]
-			box_name = self.box_indices[current_box]
+			if self.show_gt:
+				volume_to_drag = self.volumes_gt_in_scene[current_box]
+				volume_name = self.volume_gt_indices[current_box]
+				box_to_drag = self.boxes_gt_in_scene[current_box]
+				box_name = self.box_gt_indices[current_box]
+			else:
+				volume_to_drag = self.volumes_pred_in_scene[current_box]
+				volume_name = self.volume_pred_indices[current_box]
+				box_to_drag = self.boxes_pred_in_scene[current_box]
+				box_name = self.box_pred_indices[current_box]
+
+				
 			
 
 			#otherwise it's the drag part of the event, continually translate current box by the difference between
@@ -572,7 +625,10 @@ class Annotation:
 	#deselect_box removes current properties, un-highlights box, and sets selected box back to -1
 	def deselect_box(self):
 		if self.previous_index != -1:
-			self.scene_widget.scene.modify_geometry_material(self.box_indices[self.previous_index], self.line_mat)
+			if self.show_gt:
+				self.scene_widget.scene.modify_geometry_material(self.box_gt_indices[self.previous_index], self.line_mat)
+			else:
+				self.scene_widget.scene.modify_geometry_material(self.box_pred_indices[self.previous_index], self.line_mat)
 			self.scene_widget.scene.show_geometry(self.coord_frame, False)
 
 		self.point_cloud.post_redraw()
@@ -587,12 +643,20 @@ class Annotation:
 	#it also moves the coordinate frame to the selected box
 	def select_box(self, box_index):
 		if self.previous_index != -1:  # if not first box clicked "deselect" previous box
-			self.scene_widget.scene.modify_geometry_material(self.box_indices[self.previous_index], self.line_mat)
+			if self.show_gt:
+				self.scene_widget.scene.modify_geometry_material(self.box_gt_indices[self.previous_index], self.line_mat)
+			else:
+				self.scene_widget.scene.modify_geometry_material(self.box_pred_indices[self.previous_index], self.line_mat)
 
 		rendering.Open3DScene.remove_geometry(self.scene_widget.scene, self.coord_frame)
 		self.previous_index = box_index
-		box = self.box_indices[box_index]
-		origin = o3d.geometry.TriangleMesh.get_center(self.volumes_in_scene[box_index])
+		if self.show_gt:
+			box = self.box_gt_indices[box_index]
+			origin = o3d.geometry.TriangleMesh.get_center(self.volumes_gt_in_scene[box_index])
+		else:
+			box = self.box_pred_indices[box_index]
+			origin = o3d.geometry.TriangleMesh.get_center(self.volumes_pred_in_scene[box_index])
+		
 		frame = o3d.geometry.TriangleMesh.create_coordinate_frame(2.0, origin)
 		rendering.Open3DScene.modify_geometry_material(self.scene_widget.scene, box, self.line_mat_highlight)
 		self.scene_widget.scene.add_geometry("coord_frame", frame, self.coord_frame_mat, True)
@@ -611,10 +675,17 @@ class Annotation:
 			volume_to_add = volume_to_add.rotate(Quaternion(extrinsics['rotation']).rotation_matrix, [0, 0, 0])
 			volume_to_add = volume_to_add.translate(np.array(extrinsics['translation']))
 			cube_id = "volume_" + str(self.box_count)
-			self.volume_indices.append(cube_id)
+			if self.show_gt:
+				self.volume_gt_indices.append(cube_id)
+			else:
+				self.volume_pred_indices.append(cube_id)
+
 
 			volume_to_add.compute_vertex_normals()
-			self.volumes_in_scene.append(volume_to_add)
+			if self.show_gt:
+				self.volumes_gt_in_scene.append(volume_to_add)
+			else:
+				self.volumes_pred_in_scene.append(volume_to_add)
 			self.scene_widget.scene.add_geometry(cube_id, volume_to_add, self.transparent_mat)
 			self.box_count += 1
 
@@ -650,7 +721,10 @@ class Annotation:
 		annot_vert.add_child(annot_type)
 		annot_vert.add_child(annot_class)
 		current_box = self.previous_index
-		box_object = self.boxes_in_scene[current_box]
+		if self.show_gt:
+			box_object = self.boxes_gt_in_scene[current_box]
+		elif self.show_pred:
+			box_object = self.boxes_pred_in_scene[current_box]
 
 		scaled_color = tuple(255*x for x in box_object.color)
 		if self.show_gt:
@@ -704,10 +778,22 @@ class Annotation:
 		box_to_rotate = box_to_rotate.rotate(reverse_extrinsic.rotation_matrix, [0,0,0])
 		result = Quaternion(matrix=box_to_rotate.R)
 		size = [box_scale[1], box_scale[0], box_scale[2]] #flip the x and y scale back
+
+		print('-------------------')
+		print('len of temp boxes: ', len(self.temp_boxes['boxes']))
+		print('len of temp pred boxes: ', len(self.temp_pred_boxes['boxes']))
+		print('len of boxes gt in scene: ', len(self.boxes_gt_in_scene))
+		print('len of boxes pred in scene: ', len(self.boxes_pred_in_scene))
+		print('len of boxes pred to render: ', len(self.boxes_pred_to_render))
+		print('len of boxes gt to render: ', len(self.boxes_gt_to_render))
+		print('previous index: ', self.previous_index)
+		print('volumes gt in scene: ', len(self.volumes_gt_in_scene))
+		print('volumes pred in scene: ', len(self.volumes_pred_in_scene))
+
 		if self.show_gt:
-			current_temp_box = self.temp_boxes["boxes"][self.previous_index]
+			current_temp_box = self.boxes_gt_to_render[self.previous_index]
 		else:
-			current_temp_box = self.temp_pred_boxes["boxes"][self.previous_index]
+			current_temp_box = self.boxes_pred_to_render[self.previous_index]
 		
 		if current_temp_box["data"]["propagate"]:
 			updated_box_metadata = self.create_box_metadata(box_to_rotate.center, size, result.elements, current_temp_box["annotation"], current_temp_box["confidence"], "", 0, {"propagate": True})
@@ -737,14 +823,15 @@ class Annotation:
 	def label_change_handler(self, label, pos):
 		if self.show_gt:
 			self.temp_boxes["boxes"][self.previous_index]["annotation"] = label
-		else:
-			self.temp_pred_boxes["boxes"][self.previous_index]["annotation"] = label
-		current_box = self.boxes_in_scene[self.previous_index]
-		box_name = self.box_indices[self.previous_index]
-		if self.show_gt:
+			current_box = self.boxes_gt_in_scene[self.previous_index]
+			box_name = self.box_gt_indices[self.previous_index]
 			box_data = self.temp_boxes["boxes"][self.previous_index]
 		else:
+			self.temp_pred_boxes["boxes"][self.previous_index]["annotation"] = label
+			current_box = self.boxes_pred_in_scene[self.previous_index]
+			box_name = self.box_pred_indices[self.previous_index]
 			box_data = self.temp_pred_boxes["boxes"][self.previous_index]
+
 		self.scene_widget.scene.remove_geometry(box_name)
 
 		# changes color of box based on label selection
@@ -764,10 +851,16 @@ class Annotation:
 	#used by property fields to move box along specified axis to new position -> value
 	def translate_box(self, axis, value):
 		current_box = self.previous_index
-		box_to_drag = self.boxes_in_scene[current_box]
-		box_name = self.box_indices[current_box]
-		volume_to_drag = self.volumes_in_scene[current_box]
-		volume_name = self.volume_indices[current_box]
+		if self.show_gt:
+			box_to_drag = self.boxes_gt_in_scene[current_box]
+			box_name = self.box_gt_indices[current_box]
+			volume_to_drag = self.volumes_gt_in_scene[current_box]
+			volume_name = self.volume_gt_indices[current_box]
+		else:
+			box_to_drag = self.boxes_pred_in_scene[current_box]
+			box_name = self.box_pred_indices[current_box]
+			volume_to_drag = self.volumes_pred_in_scene[current_box]
+			volume_name = self.volume_pred_indices[current_box]
 
 		self.scene_widget.scene.remove_geometry(box_name)
 		self.scene_widget.scene.remove_geometry(volume_name)
@@ -801,10 +894,16 @@ class Annotation:
 	#volume and boxes _in_scene entries.
 	def rotate_box(self, axis, value):
 		current_box = self.previous_index
-		box_to_drag = self.boxes_in_scene[current_box]
-		box_name = self.box_indices[current_box]
-		volume_to_drag = self.volumes_in_scene[current_box]
-		volume_name = self.volume_indices[current_box]
+		if self.show_gt:
+			box_to_drag = self.boxes_gt_in_scene[current_box]
+			box_name = self.box_gt_indices[current_box]
+			volume_to_drag = self.volumes_gt_in_scene[current_box]
+			volume_name = self.volume_gt_indices[current_box]
+		else:
+			box_to_drag = self.boxes_pred_in_scene[current_box]
+			box_name = self.box_pred_indices[current_box]
+			volume_to_drag = self.volumes_pred_in_scene[current_box]
+			volume_name = self.volume_pred_indices[current_box]
 
 		self.scene_widget.scene.remove_geometry(box_name)
 		self.scene_widget.scene.remove_geometry(volume_name)
@@ -835,11 +934,18 @@ class Annotation:
 	#volume in self.volumes_in_scene
 	def scale_box(self, axis, value):
 		current_box = self.previous_index
-		box_to_drag = self.boxes_in_scene[current_box]
-		box_center = box_to_drag.center
-		box_name = self.box_indices[current_box]
-		volume_to_drag = self.volumes_in_scene[current_box]
-		volume_name = self.volume_indices[current_box]
+		if self.show_gt:
+			box_to_drag = self.boxes_gt_in_scene[current_box]
+			box_center = box_to_drag.center
+			box_name = self.box_gt_indices[current_box]
+			volume_to_drag = self.volumes_gt_in_scene[current_box]
+			volume_name = self.volume_gt_indices[current_box]
+		else:
+			box_to_drag = self.boxes_pred_in_scene[current_box]
+			box_center = box_to_drag.center
+			box_name = self.box_pred_indices[current_box]
+			volume_to_drag = self.volumes_pred_in_scene[current_box]
+			volume_name = self.volume_pred_indices[current_box]
 
 		self.scene_widget.scene.remove_geometry(box_name)
 		self.scene_widget.scene.remove_geometry(volume_name)
@@ -862,7 +968,10 @@ class Annotation:
 			volume_to_drag = self.add_volume([trans, (scale[1], scale[0], scale[2]), qrt])
 
 		volume_to_drag.compute_vertex_normals()
-		self.volumes_in_scene[self.previous_index] = volume_to_drag
+		if self.show_gt:
+			self.volumes_gt_in_scene[self.previous_index] = volume_to_drag
+		else:
+			self.volumes_pred_in_scene[self.previous_index] = volume_to_drag
 		self.scene_widget.scene.add_geometry(box_name, box_to_drag, self.line_mat_highlight)
 		self.scene_widget.scene.add_geometry(volume_name, volume_to_drag, self.transparent_mat)
 		self.update_props()
@@ -888,10 +997,17 @@ class Annotation:
 	#Helper function for placing new boxes around the same level as the road
 	def get_depth_average(self):
 		z_total = 0
-		for box in self.boxes_in_scene:
+		print('self.box_gt_in_scene: ', len(self.boxes_gt_in_scene))
+		print('self.box_pred_in_scene: ', len(self.boxes_pred_in_scene))
+		if self.show_gt:
+			boxes_in_scene = self.boxes_gt_in_scene
+		else:
+			boxes_in_scene = self.boxes_pred_in_scene
+		print('boxes in scene: ', len(boxes_in_scene))
+		for box in boxes_in_scene:
 			box_origin = box.get_center()
 			z_total += box_origin[2]
-		return z_total/self.box_count
+		return z_total/len(boxes_in_scene)
 
 	#Extracts the current data for a selected bounding box
 	#returns it as a json object for use in save and export functions
@@ -955,7 +1071,12 @@ class Annotation:
 		# Extract new image from file
 		self.image = np.asarray(Image.open(self.image_path))
 
-		for b in self.boxes_to_render:
+		if self.show_gt:
+			boxes_to_render = self.boxes_gt_to_render
+		else:
+			boxes_to_render = self.boxes_pred_to_render
+
+		for b in boxes_to_render:
 			box = Box(b[0], b[1], Quaternion(b[2]), name=b[3], score=b[4],
 					  velocity=(0, 0, 0))
 			color = b[5]
@@ -964,7 +1085,7 @@ class Annotation:
 			# Box is stored in vehicle frame, so transform it to RGB sensor frame
 			box.translate(-np.array(self.image_extrinsic['translation']))
 			box.rotate(Quaternion(self.image_extrinsic['rotation']).inverse)
-			curr_index = self.boxes_to_render.index(b)
+			curr_index = boxes_to_render.index(b)
 			line_weight = 2
 			# Thank you to Oscar Beijbom for providing this box rendering algorithm at https://github.com/nutonomy/nuscenes-devkit/blob/master/python-sdk/nuscenes/utils/data_classes.py
 			if box_in_image(box, np.asarray(self.image_intrinsic['matrix']), (self.image_w, self.image_h),
@@ -1133,10 +1254,12 @@ class Annotation:
 		if new_val == "Predicted" and self.pred_frames > 0:
 			self.show_pred = True
 			self.show_gt = False
+			self.previous_index = -1
 			self.update()
 		else: # switched to ground truth boxes
 			self.show_pred = False
 			self.show_gt = True
+			self.previous_index = -1
 			self.update()
 	
 	def jump_to_vehicle(self):
@@ -1153,17 +1276,25 @@ class Annotation:
 	def delete_annotation(self):
 		if self.box_selected:
 			current_box = self.previous_index
-			box_name = self.box_indices[current_box]
-			volume_name = self.volume_indices[current_box]
 
 			if self.show_gt:
+				box_name = self.box_gt_indices[current_box]
+				volume_name = self.volume_gt_indices[current_box]
 				self.temp_boxes["boxes"].pop(current_box)
+				self.box_gt_indices.pop(current_box)
+				self.volume_gt_indices.pop(current_box)
+				self.boxes_gt_in_scene.pop(current_box)
+				self.volumes_gt_in_scene.pop(current_box)
+
 			else:
+				box_name = self.box_pred_indices[current_box]
+				volume_name = self.volume_pred_indices[current_box]
 				self.temp_pred_boxes["boxes"].pop(current_box)
-			self.box_indices.pop(current_box)
-			self.volume_indices.pop(current_box)
-			self.boxes_in_scene.pop(current_box)
-			self.volumes_in_scene.pop(current_box)
+				self.box_pred_indices.pop(current_box)
+				self.volume_pred_indices.pop(current_box)
+				self.boxes_pred_in_scene.pop(current_box)
+				self.volumes_pred_in_scene.pop(current_box)
+			
 					
 			rendering.Open3DScene.remove_geometry(self.scene_widget.scene, box_name)
 			rendering.Open3DScene.remove_geometry(self.scene_widget.scene, volume_name)
@@ -1258,7 +1389,6 @@ class Annotation:
 		old_pred_boxes = json.load(open(old_pred_boxes_path))
 		old_gt_boxes = json.load(open(old_gt_boxes_path))
 
-		print(self.temp_pred_boxes["boxes"][0]["data"]["propagate"])
 		new_gt_boxes = [box for box in self.temp_boxes["boxes"] if (box not in old_gt_boxes["boxes"] and box["data"]["propagate"]==True)]
 		new_pred_boxes = [box for box in self.temp_pred_boxes["boxes"] if (box not in old_pred_boxes["boxes"] and box["data"]["propagate"]==True)]
 
@@ -1344,10 +1474,14 @@ class Annotation:
 				None
 				"""
 		self.scene_widget.scene.clear_geometry()
-		self.boxes_in_scene = []
-		self.box_indices = []
-		self.volumes_in_scene = []
-		self.volume_indices = []
+		self.boxes_pred_in_scene = []
+		self.boxes_gt_in_scene = []
+		self.box_pred_indices = []
+		self.box_gt_indices = []
+		self.volume_pred_indices = []
+		self.volume_gt_indices = []
+		self.volumes_pred_in_scene = []
+		self.volumes_gt_in_scene = []
 		# Add Pointcloud
 		temp_points = np.empty((0,3))
 		for label in self.label_list:
@@ -1373,7 +1507,12 @@ class Annotation:
 		mat.shader = "unlitLine"
 		mat.line_width = .25
 
-		for box in self.boxes_to_render:
+		if self.show_gt:
+			boxes_to_render = self.boxes_gt_to_render
+		else:
+			boxes_to_render = self.boxes_pred_to_render
+
+		for box in boxes_to_render:
 			size = [0,0,0]
 			# Open3D wants sizes in L,W,H
 			size[0] = box[SIZE][1]
@@ -1386,8 +1525,12 @@ class Annotation:
 			hex = '#%02x%02x%02x' % color # bounding_box.color needs to be a tuple of floats (color is a tuple of ints)
 			bounding_box.color = matplotlib.colors.to_rgb(hex)
 
-			self.box_indices.append(box[ANNOTATION] + str(i)) #used to reference specific boxes in scene
-			self.boxes_in_scene.append(bounding_box)
+			if self.show_gt:
+				self.box_gt_indices.append(box[ANNOTATION] + str(i)) #used to reference specific boxes in scene
+				self.boxes_gt_in_scene.append(bounding_box)
+			else:
+				self.box_pred_indices.append(box[ANNOTATION] + str(i))
+				self.boxes_pred_in_scene.append(bounding_box)
 
 			# might be useful later
 			# if box[CONFIDENCE] < 100 and self.show_score:
@@ -1399,7 +1542,7 @@ class Annotation:
 			i += 1
 
 		# update volumes in the scene
-		self.create_box_scene(self.scene_widget, self.boxes_to_render, self.frame_extrinsic)
+		self.create_box_scene(self.scene_widget, boxes_to_render, self.frame_extrinsic)
 
 
 		#Add Line that indicates current RGB Camera View
@@ -1435,7 +1578,8 @@ class Annotation:
 				"""
 
 		#Array that will hold list of boxes that will eventually be rendered
-		self.boxes_to_render = []
+		self.boxes_pred_to_render = []
+		self.boxes_gt_to_render = []
 
 		#
 		self.boxes = json.load(open(os.path.join(self.lct_path , "bounding", str(self.frame_num), "boxes.json")))
@@ -1456,7 +1600,7 @@ class Annotation:
 				if box['confidence'] >= self.min_confidence:
 					bounding_box = [box['origin'], box['size'], box['rotation'], box['annotation'],
 									box['confidence'], self.color_map[box['annotation']]]
-					self.boxes_to_render.append(bounding_box)
+					self.boxes_gt_to_render.append(bounding_box)
 
 		#Add Pred Boxes we should render
 		if self.show_pred is True:
@@ -1464,7 +1608,7 @@ class Annotation:
 				for box in self.pred_boxes['boxes']:
 					if box['confidence'] >= self.min_confidence:
 						bounding_box = [box['origin'], box['size'], box['rotation'], box['annotation'], box['confidence'], self.pred_color_map[box['annotation']]]
-						self.boxes_to_render.append(bounding_box)
+						self.boxes_pred_to_render.append(bounding_box)
 
 
 		#Post Redraw calls seem to crash the app on windows. Temporary workaround
@@ -1478,10 +1622,12 @@ class Annotation:
         Returns:
             None
             """
-		print("boxes in scene:", self.boxes_in_scene)
-		print("boxes to render:", self.boxes_to_render)
-		print("temp boxes:", self.temp_boxes)
-		print("temp pred boxes:", self.temp_pred_boxes)
+		# print("pred boxes in scene:", self.boxes_pred_in_scene)
+		# print("gt boxes in scene:", self.boxes_gt_in_scene)
+		# print("pred boxes to render:", self.boxes_pred_to_render)
+		# print("gt boxes to render:", self.boxes_gt_to_render)
+		# print("temp boxes:", self.temp_boxes)
+		# print("temp pred boxes:", self.temp_pred_boxes)
 		self.update_pcd_path()
 		self.update_bounding()
 		self.update_image_path()
