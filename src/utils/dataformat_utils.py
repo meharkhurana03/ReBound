@@ -194,7 +194,7 @@ def create_frame_bounding_directory(path, frame_num, origins, sizes, rotations, 
         if not predicted:
             box['id'] = ids[i]
             box['internal_pts'] = internal_points[i]
-        box['data'] = {'propagate': False}
+        box['data'] = {}
         if data:
             for k in data.keys():
                 box['data'][k] = data[k][i]
