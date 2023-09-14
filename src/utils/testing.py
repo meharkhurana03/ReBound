@@ -35,21 +35,25 @@ def is_lct_directory(path):
         print("There is no directory named \"cameras\" at the selected path.\n")
         is_verified = False
     if not inside_cameras_valid:
+        print("The cameras directory is not properly formatted. \n")
         is_verified = False
     if not pointcloud_exists:
         print("There is no directory named \"pointcloud\" at the selected path. \n")
         is_verified = False
     if not inside_pointcloud_valid:
+        print("The pointcloud directory is not properly formatted. \n")
         is_verified = False
     if not bounding_exists:
         print("There is no directory named \"bounding\" at the selected path. \n")
         is_verified = False
     if not inside_bounding_valid:
+        print("The bounding directory is not properly formatted. \n")
         is_verified = False
     if not ego_exists:
         print("There is no directory named \"ego\" at the selected path. \n")
         is_verified = False
     if not inside_ego_valid:
+        print("The ego directory is not properly formatted. \n")
         is_verified = False
     if not predicted_exists:
         print("There is no directory named \"pred_bounding\" at the selected path. \n")
@@ -76,7 +80,11 @@ def check_inside_cameras(path):
         has_ex = False
         has_jpg = True
         # Files in cameras
+        if dir == ".DS_Store":
+            continue # check for MacOS
         for file in os.listdir(os.path.join(path, dir)):
+            if file == ".DS_Store":
+                continue # check for MacOS
             if file == "extrinsics.json": 
                 if not has_ex: 
                     has_ex = True
@@ -110,7 +118,11 @@ def check_inside_pointcloud(path):
     is_verified = True
 
     for dir in os.listdir(path):
+        if dir == ".DS_Store":
+            continue # check for MacOS
         for file in os.listdir(os.path.join(path, dir)):
+            if file == ".DS_Store":
+                continue # check for MacOS
             extension = file[-4:]
             if extension != ".pcd":
                 is_verified = False
@@ -135,7 +147,11 @@ def check_inside_bounding(path):
         has_description = False
         has_boxes = False
         # Loop through files in frame
+        if dir == ".DS_Store":
+            continue # check for MacOS
         for file in os.listdir(os.path.join(path, dir)):
+            if file == ".DS_Store":
+                continue # check for MacOS
             if has_boxes and has_description:
                 is_verified = False
                 print("directory " + dir + " has multiple description.JSON/boxes.json files")
@@ -143,6 +159,8 @@ def check_inside_bounding(path):
                 has_description = True
             elif file == "boxes.json":
                 has_boxes = True
+            elif file == "2d_boxes.json":
+                continue
             else:
                 is_verified = False
         
@@ -164,6 +182,8 @@ def check_inside_ego(path):
     is_verified = True
 
     for file in os.listdir(path):
+        if file == ".DS_Store":
+            continue # check for MacOS
         if not file[-5:] == ".json":
             is_verified = False
             print("There is a file in the ego directory that is not a json file")

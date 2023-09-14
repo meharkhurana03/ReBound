@@ -191,13 +191,18 @@ def create_frame_bounding_directory(path, frame_num, origins, sizes, rotations, 
         box['rotation'] = rotations[i]
         box['annotation'] = annotation_names[i]
         box['confidence'] = confidences[i]
-        box['id'] = ids[i]
-        box['internal_pts'] = internal_points[i]
-        box['data'] = {}
+        if not predicted:
+            box['id'] = ids[i]
+            box['internal_pts'] = internal_points[i]
+        box['data'] = {'propagate': False}
         if data:
             for k in data.keys():
                 box['data'][k] = data[k][i]
         box_data['boxes'].append(box)
+
+    # if bbox2d:
+    #     print("creating 2d boxes...")
+    #     # convert 3d boxes to 2d
 
     with open(json_path, 'w') as f:
         json.dump(box_data, f)
@@ -258,7 +263,7 @@ def add_timestamps(path, timestamps):
     with open(path + "/timestamps.json","w") as f:
         json.dump({"timestamps":timestamps}, f, indent=0)
 
-def print_progress_bar(frame_num, total):
+def print_progress_bar(frame_num, total, scene_name):
     """Prints a progress bar
     Args:
         frame_num: current frame number
@@ -277,8 +282,9 @@ def print_progress_bar(frame_num, total):
     
     filled_length = (length * frame_num//total)
     bar = '█' * filled_length + '-' * (length - filled_length)
-    print(f'\rConverting: {bar} {frame_num}/{total} frames', end = '\r')
+    print(f'\rConverting {scene_name}: {bar} {frame_num}/{total} frames', end = '\r')
     
     # After progress is complete run a new line
     if frame_num == total: 
         print()
+
