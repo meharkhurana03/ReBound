@@ -35,21 +35,25 @@ def is_lct_directory(path):
         print("There is no directory named \"cameras\" at the selected path.\n")
         is_verified = False
     if not inside_cameras_valid:
+        print("The cameras directory is not properly formatted. \n")
         is_verified = False
     if not pointcloud_exists:
         print("There is no directory named \"pointcloud\" at the selected path. \n")
         is_verified = False
     if not inside_pointcloud_valid:
+        print("The pointcloud directory is not properly formatted. \n")
         is_verified = False
     if not bounding_exists:
         print("There is no directory named \"bounding\" at the selected path. \n")
         is_verified = False
     if not inside_bounding_valid:
+        print("The bounding directory is not properly formatted. \n")
         is_verified = False
     if not ego_exists:
         print("There is no directory named \"ego\" at the selected path. \n")
         is_verified = False
     if not inside_ego_valid:
+        print("The ego directory is not properly formatted. \n")
         is_verified = False
     if not predicted_exists:
         print("There is no directory named \"pred_bounding\" at the selected path. \n")
@@ -155,6 +159,8 @@ def check_inside_bounding(path):
                 has_description = True
             elif file == "boxes.json":
                 has_boxes = True
+            elif file == "2d_boxes.json":
+                continue
             else:
                 is_verified = False
         
