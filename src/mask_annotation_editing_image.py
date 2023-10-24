@@ -4,6 +4,7 @@
 import math
 import time
 import uuid
+from datetime import timedelta
 
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
@@ -72,6 +73,10 @@ class Annotation:
 		self.image_w = self.image.width
 		self.image_h = self.image.height
 		self.image = np.asarray(self.image)
+
+		self.annotation_start_time = 0
+		self.annotation_end_time = 0
+		self.update_timer = False
 
 		# self.lidar_sensors = lidar_sensors
 		# self.lidar_sensor_name = lidar_sensors[0]
@@ -213,6 +218,20 @@ class Annotation:
 		self.save_check = 0
 		save_as_button = gui.Button("Save As")
 		save_as_button.set_on_clicked(self.save_as)
+
+		timer_vert = gui.CollapsableVert("Timer")
+		timer_horiz = gui.Horiz(0.50 * em, margin)
+		timer_horiz.add_child(gui.Label("Time Elapsed:"))
+		self.time_elapsed = gui.TextEdit()
+		self.time_elapsed.placeholder_text = "0:00"
+		timer_horiz.add_child(self.time_elapsed)
+		start_timer_button_horiz = gui.Horiz(0.50 * em, margin)
+		start_timer_button = gui.Button("Start Timer")
+		start_timer_button.set_on_clicked(self.start_timer)
+		start_timer_button_horiz.add_child(start_timer_button)
+		timer_vert.add_child(timer_horiz)
+		timer_vert.add_child(start_timer_button_horiz)
+
 		# save_and_prop_horiz = gui.Horiz(0.50 * em, margin)
 		# save_and_prop_button = gui.Button("Save and Propagate New Masks to Next Frame")
 		# save_and_prop_to_next = functools.partial(self.save_and_propagate)
@@ -409,6 +428,7 @@ class Annotation:
 		# layout.add_child(toggle_camera_vert)
 		layout.add_child(properties_vert)
 
+		layout.add_child(timer_vert)
 		layout.add_child(exit_annotation_horiz)
 
 		self.cw.add_child(layout)
@@ -437,6 +457,14 @@ class Annotation:
 	# 	box.rotate(Quaternion(self.frame_extrinsic['rotation']).rotation_matrix, [0, 0, 0])
 	# 	box.translate(self.frame_extrinsic['translation'])
 	# 	return box.get_center()
+
+
+	def start_timer(self):
+		self.annotation_start_time = time.time()
+		self.annotation_end_time = 0
+		self.time_elapsed.text_value = "00:00"
+		self.update_timer = True
+
 
 	# onclick, places down a bounding box on the cursor, then reenables mouse functionality
 	def add_poly(self):
@@ -1119,6 +1147,9 @@ class Annotation:
 						class_list.append(annotation)
 				self.annotation_class.set_items(class_list)
 
+		if self.update_timer:
+			self.time_elapsed.text_value = str(timedelta(seconds=(time.time()-self.annotation_start_time)))
+
 		# # corners = box_object[CORNERS]
 		#  = poly_object.vertices
 		# # box_rotate = list(box_object.R)
@@ -1327,7 +1358,7 @@ class Annotation:
 				# Add annotation label
 				# self.image = cv2.putText(self.image, b[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
 				# self.image = cv2.putText(self.image, p[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
-			self.image = cv2.putText(self.image, p.annotation, (int(p.vertices[0][0]), int(p.vertices[0][1]-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
+			self.image = cv2.putText(self.image, p.annotation, (int(p.vertices[0][0]), int(p.vertices[0][1]-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 			
 				# if selected:
 				# 	self.image = cv2.rectangle(self.image, (int(x1-2), int(y1-2)), (int(x1+2), int(y1+2)), (255, 255, 255), 3)
@@ -1575,12 +1606,20 @@ class Annotation:
 			# path = os.path.join(self.lct_path ,"mask", str(self.frame_num), "2d_boxes.json")
 			path = self.output_path
 			# boxes_to_save = {"boxes": [box for box in self.temp_boxes["boxes"]]}
-			polys_to_save = {"polys": [poly for poly in self.temp_polys["polys"]]}
+			polys_to_save = {"polys": [poly for poly in self.temp_polys["polys"]], "metadata": {
+				"start_time": self.annotation_start_time,
+				"end_time": time.time(),
+			}}
 		elif self.show_pred and not self.show_gt:
 			# path = os.path.join(self.lct_path ,"pred_mask", str(self.frame_num), "2d_boxes.json")
 			path = self.pred_path
 			# boxes_to_save = {"boxes": [box for box in self.temp_pred_boxes["boxes"]]}
-			polys_to_save = {"polys": [poly for poly in self.temp_pred_polys["polys"]]}
+			polys_to_save = {"polys": [poly for poly in self.temp_pred_polys["polys"]], "metadata": {
+				"start_time": self.annotation_start_time,
+				"end_time": time.time(),
+				"image_width": self.image_w,
+				"image_height": self.image_h,
+			}}
 		
 		try:
 			with open(path, "w") as outfile:
