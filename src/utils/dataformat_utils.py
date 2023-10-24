@@ -19,7 +19,7 @@ ANNOTATION = 3
 CONFIDENCE = 4
 COLOR = 5
 
-def create_lct_directory(path, name):
+def create_lct_directory(path, name, mask=False):
     """Create top level LCT directory at specified path
     Args:
         path: target path where directory will be stored
@@ -28,6 +28,8 @@ def create_lct_directory(path, name):
         None
         """
     sub_directories = ['cameras', 'pointcloud', 'bounding', 'pred_bounding', 'ego']
+    if mask:
+        sub_directories = ['cameras', 'pointcloud', 'mask', 'pred_mask', 'ego']
     try:
         parent_path = os.path.join(path, name)
         os.makedirs(parent_path, exist_ok=True)
@@ -207,7 +209,7 @@ def create_frame_bounding_directory(path, frame_num, origins, sizes, rotations, 
     with open(json_path, 'w') as f:
         json.dump(box_data, f)
 
-def create_annotation_map(path, annotation_map):
+def create_annotation_map(path, annotation_map, mask=False):
     """Specifies the correct relationship between GT annotation names and Predicted names.
     Args:
         path: path to LCT dir
@@ -216,6 +218,8 @@ def create_annotation_map(path, annotation_map):
     """
     json_name = 'annotation_map.json'
     json_path = os.path.join(path, 'pred_bounding', json_name)
+    if mask:
+        json_path = os.path.join(path, 'pred_mask', json_name)
     with open(json_path, 'w') as f:
         json.dump(annotation_map, f)
 

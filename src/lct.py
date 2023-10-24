@@ -166,9 +166,8 @@ class Window:
         self.anno_control = gui.CollapsableVert("Annotation Control", .25 * em, margin)
 
         # Set up drop down menu for switching between RGB sensors
-        sensor_select = gui.Combobox()
-        for cam in self.camera_sensors:
-            sensor_select.add_item(cam)
+        sensor_select = gui.ListView()
+        sensor_select.set_items(self.camera_sensors)
         sensor_select.set_on_selection_changed(self.on_sensor_select)
 
         # Set up checkboxes for selecting ground truth annotations
@@ -198,7 +197,7 @@ class Window:
 
         # Set up checkboxes for selecting predicted annotations
         frames_available = [entry for entry in os.scandir(os.path.join(self.lct_path, "pred_bounding"))]
-        self.pred_frames = len(frames_available) - 1
+        self.pred_frames = len(frames_available) - 2
         self.pred_check_horiz = []
         self.all_pred_annotations = []
         for i in range(0, self.pred_frames):
@@ -264,9 +263,11 @@ class Window:
         confidence_select_layout.add_child(confidence_select)
 
         # Add combobox to switch between predicted and ground truth
-        self.bounding_toggle = gui.Combobox()
-        self.bounding_toggle.add_item("Ground Truth")
-        self.bounding_toggle.add_item("Predicted")
+        # self.bounding_toggle = gui.Combobox()
+        self.bounding_toggle = gui.ListView()
+        # self.bounding_toggle.add_item("Ground Truth")
+        # self.bounding_toggle.add_item("Predicted")
+        self.bounding_toggle.set_items(["Ground Truth", "Predicted"])
         self.bounding_toggle.set_on_selection_changed(self.toggle_bounding)
 
         bounding_toggle_layout = gui.Horiz()

@@ -9,12 +9,22 @@ import os
 from utils import dataformat_utils
 import json
 from nuscenes.nuscenes import NuScenes
+import nuscenes
+
+from collections import OrderedDict
+from typing import List, Tuple, Union
+from shapely.geometry import MultiPoint, box
 
 from nuscenes.utils.data_classes import LidarPointCloud
 from nuscenes.utils.data_classes import Quaternion
 from nuscenes.utils.data_classes import Box
 
+from nuscenes.utils.geometry_utils import view_points, box_in_image, BoxVisibility
+# from nuscenes.scripts.export_2d_annotations_as_json import get_2d_boxes
+
 import numpy as np
+
+use_bbox2d = False
 
 def parse_options():
     """Read in user command line input to get directory paths which will be used for input and output.
@@ -26,6 +36,7 @@ def parse_options():
         scene_name: Name of the scene in NuScenes
         pred_path: Path to data based on a model's predictions
         """
+    global use_bbox2d
     input_path = ""
     output_path = ""
     # We can make scene_names a list so that it either includes the name of one scene or every scene a user wants to batch process
@@ -39,8 +50,9 @@ def parse_options():
     # -f is used to specify the path to the Waymo file you want to read in and requires one arg. If -r is specified then this arg
     # corresponds to a directory containing all the .tfrecord files you'd like to read in
     # -o is used to specify the path to the directory where the LVT format will go.
+    # -t is used to specify whether a copy of 3D bounding boxes should be converted to 2D bounding boxes and saved in the same directory
     try:
-        opts, _ = getopt.getopt(sys.argv[1:], "hf:o:s:p:rv:", "help")
+        opts, _ = getopt.getopt(sys.argv[1:], "hf:o:s:p:rv:t", "help")
     except getopt.GetoptError as err:
         print(err)
         sys.exit(2)
@@ -51,6 +63,7 @@ def parse_options():
             print("REQUIRED: -o to specify the path where the LVT dataset will go")
             print("OPTIONAL: -p to specify a path to projected data")
             print("REQUIRED: -v to specify the version of this dataset eg: v1.0-mini")
+            print("OPTIONAL: -t to specify whether to store 2D bounding boxes along with 3D")
             sys.exit(2)
         elif opt == "-f":
             input_path = arg
@@ -64,6 +77,8 @@ def parse_options():
             pred_path = arg
         elif opt == "-v":
             ver_name = arg
+        elif opt == "-t":
+            use_bbox2d = True
 
         else:
             print("Invalid set of arguments entered. Please refer to -h flag for more information.")
@@ -107,69 +122,170 @@ def extract_ego(nusc, sample, frame_num, output_path):
     full_path = os.path.join(os.getcwd(), output_path)
     dataformat_utils.create_ego_directory(full_path, frame_num, poserecord['translation'], poserecord['rotation'])
 
-def extract_bounding(nusc, sample, frame_num, output_path):
-    """Extracts the bounding data from a nuScenes frame and converts it into our intermediate format
-    Args:
-        nusc: NuScenes API object used for obtaining data
-        sample: Frame of nuScenes data
-        frame_num: Number corresponding to sample
-        output_path: Path to generic data format directory
-    Returns:
-        None
-        """
-    ann_tokens = []
-    instance_tokens = []
-    num_lidar_pts = []
-    origins = []
-    sizes = []
-    rotations = []
-    annotation_names = []
-    confidences = []
+# Thanks to Sergi Adipraja Widjaja for the following 3 functions. Code available at https://github.com/nutonomy/nuscenes-devkit/blob/master/python-sdk/nuscenes/scripts/export_2d_annotations_as_json.py
+def post_process_coords(corner_coords: List,
+                        imsize: Tuple[int, int] = (1600, 900)) -> Union[Tuple[float, float, float, float], None]:
+    """
+    Get the intersection of the convex hull of the reprojected bbox corners and the image canvas, return None if no
+    intersection.
+    :param corner_coords: Corner coordinates of reprojected bounding box.
+    :param imsize: Size of the image canvas.
+    :return: Intersection of the convex hull of the 2D box corners and the image canvas.
+    """
+    polygon_from_2d_box = MultiPoint(corner_coords).convex_hull
+    img_canvas = box(0, 0, imsize[0], imsize[1])
+
+    if polygon_from_2d_box.intersects(img_canvas):
+        img_intersection = polygon_from_2d_box.intersection(img_canvas)
+        intersection_coords = np.array([coord for coord in img_intersection.exterior.coords])
+
+        min_x = min(intersection_coords[:, 0])
+        min_y = min(intersection_coords[:, 1])
+        max_x = max(intersection_coords[:, 0])
+        max_y = max(intersection_coords[:, 1])
+
+        return min_x, min_y, max_x, max_y
+    else:
+        return None
     
-    # Get translation, rotation, dimensions, and origins for bounding boxes for each annotation
-    for i in range(0, len(sample['anns'])):
-        token = sample['anns'][i]
-        ann_tokens.append(token)
-        annotation_metadata = nusc.get('sample_annotation', token)
-        instance_tokens.append(annotation_metadata['instance_token'])
-        num_lidar_pts.append(annotation_metadata['num_lidar_pts'])
-        # Create nuscenes box object so we can easily transform this box to the vehicle frame that our dataset requires
-        box = Box(annotation_metadata['translation'], annotation_metadata['size'], Quaternion(annotation_metadata['rotation']))
+def generate_record(ann_rec: dict,
+                    x1: float,
+                    y1: float,
+                    x2: float,
+                    y2: float,
+                    sample_data_token: str,
+                    filename: str,
+                    predicted: bool = False
+                    ) -> OrderedDict:
+    """
+    Generate one 2D annotation record given various informations on top of the 2D bounding box coordinates.
+    :param ann_rec: Original 3d annotation record.
+    :param x1: Minimum value of the x coordinate.
+    :param y1: Minimum value of the y coordinate.
+    :param x2: Maximum value of the x coordinate.
+    :param y2: Maximum value of the y coordinate.
+    :param sample_data_token: Sample data token.
+    :param filename:The corresponding image file where the annotation is present.
+    :return: A sample 2D annotation record.
+    """
+    repro_rec = OrderedDict()
+    repro_rec['sample_data_token'] = sample_data_token
 
-        # Get ego pose information. The LIDAR sensor has the ego information, so we can use that.
-        sensor = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
-        poserecord = nusc.get('ego_pose', sensor['ego_pose_token'])
-        
-        #Transform the boxes from global frame to vehicle frame
-        box.translate(-np.array(poserecord['translation']))
-        box.rotate(Quaternion(poserecord['rotation']).inverse)
+    relevant_keys = [
+        'attribute_tokens',
+        'category_name',
+        'instance_token',
+        'next',
+        'num_lidar_pts',
+        # 'num_radar_pts',
+        'prev',
+        'sample_annotation_token',
+        'sample_data_token',
+        'visibility_token',
+    ]
+    repro_rec['data'] = {}
+    for key, value in ann_rec.items():
+        if key in relevant_keys:
+            if key == 'category_name':
+                repro_rec['annotation'] = value
+            elif key == 'instance_token':
+                repro_rec['id'] = value
+            elif key == 'num_lidar_pts':
+                repro_rec['internal_pts'] = value
+            elif key == 'sample_annotation_token':
+                repro_rec['data']['ann_token'] = value
+            else:
+                repro_rec[key] = value
+            
+    repro_rec['confidence'] = 101 # TODO: handle predictions
+    repro_rec['data']['propagate'] = False
+    repro_rec['bbox_corners'] = [x1, y1, x2, y2]
+    repro_rec['camera'] = filename.split('/')[1]
 
-        # Store data obtained from annotation
-        origins.append(box.center.tolist())
-        sizes.append(annotation_metadata['size'])
-        rotations.append(box.orientation.q.tolist())
-        annotation_names.append(annotation_metadata['category_name'])
+    return repro_rec
 
-        # Confidence for ground truth data is always 101 # changed this to 101 since predictions may have confidence of 100
-        confidences.append(101)
-        
-    dataformat_utils.create_frame_bounding_directory(output_path, frame_num, origins, sizes, rotations, annotation_names, confidences, instance_tokens, num_lidar_pts, data={"ann_token":ann_tokens})
+def get_2d_boxes(nusc, sample_data_token: str, visibilities: List[str]) -> List[OrderedDict]:
+    """
+    Get the 2D annotation records for a given `sample_data_token`.
+    :param sample_data_token: Sample data token belonging to a camera keyframe.
+    :param visibilities: Visibility filter.
+    :return: List of 2D annotation record that belongs to the input `sample_data_token`
+    """
 
-def extract_pred_bounding(nusc, scene_token, sample, output_path, pred_data):
-    """Similar to extract_bounding, but specifically to read in predicted data given by a user
-    Args:
-        pred_path: Path to predicated data provided by user
-        nusc: NuScenes API object used for obtaining data
-        sample: Frame of nuScenes data
-        output_path: Path to generic data format directory
-    Returns:
-        None
-        """
-    origins = []
-    sizes = []
-    rotations = []
-    annotation_names = []
-    confidences = []
+    # Get the sample data and the sample corresponding to that sample data.
+    sd_rec = nusc.get('sample_data', sample_data_token)
+
+    assert sd_rec['sensor_modality'] == 'camera', 'Error: get_2d_boxes only works for camera sample_data!'
+    if not sd_rec['is_key_frame']:
+        raise ValueError('The 2D re-projections are available only for keyframes.')
+
+    s_rec = nusc.get('sample', sd_rec['sample_token'])
+
+    # Get the calibrated sensor and ego pose record to get the transformation matrices.
+    cs_rec = nusc.get('calibrated_sensor', sd_rec['calibrated_sensor_token'])
+    pose_rec = nusc.get('ego_pose', sd_rec['ego_pose_token'])
+    camera_intrinsic = np.array(cs_rec['camera_intrinsic'])
+
+    # Get all the annotation with the specified visibilties.
+    ann_recs = [nusc.get('sample_annotation', token) for token in s_rec['anns']]
+    ann_recs = [ann_rec for ann_rec in ann_recs if (ann_rec['visibility_token'] in visibilities)]
+
+    repro_recs = []
+
+    for ann_rec in ann_recs:
+        # Augment sample_annotation with token information.
+        ann_rec['sample_annotation_token'] = ann_rec['token']
+        ann_rec['sample_data_token'] = sample_data_token
+
+        # Get the box in global coordinates.
+        box = nusc.get_box(ann_rec['token'])
+
+        # Move them to the ego-pose frame.
+        box.translate(-np.array(pose_rec['translation']))
+        box.rotate(Quaternion(pose_rec['rotation']).inverse)
+
+        # Move them to the calibrated sensor frame.
+        box.translate(-np.array(cs_rec['translation']))
+        box.rotate(Quaternion(cs_rec['rotation']).inverse)
+
+        # Filter out the corners that are not in front of the calibrated sensor.
+        corners_3d = box.corners()
+        in_front = np.argwhere(corners_3d[2, :] > 0).flatten()
+        corners_3d = corners_3d[:, in_front]
+
+        # Project 3d box to 2d.
+        corner_coords = view_points(corners_3d, camera_intrinsic, True).T[:, :2].tolist()
+
+        # Keep only corners that fall within the image.
+        final_coords = post_process_coords(corner_coords)
+
+        # Skip if the convex hull of the re-projected corners does not intersect the image canvas.
+        if final_coords is None:
+            continue
+        else:
+            min_x, min_y, max_x, max_y = final_coords
+
+        # Generate dictionary record to be included in the .json file.
+        repro_rec = generate_record(ann_rec, min_x, min_y, max_x, max_y, sample_data_token, sd_rec['filename'])
+        repro_recs.append(repro_rec)
+
+    return repro_recs
+def extract_masks(nusc, sample, frame_num, output_path):
+    """ for now, create empty polys.json files """
+    os.makedirs(os.path.join(output_path, 'mask', str(frame_num)), exist_ok=True)
+    with open(os.path.join(output_path, 'mask', str(frame_num), "polys.json"), "w") as f:
+        json.dump({
+            "polys": [],
+        }, f)
+
+    with open(os.path.join(output_path, 'mask', str(frame_num), "description.json"), "w") as f:
+        json.dump({
+            "num_polys": 0,
+        }, f)
+
+def extract_pred_masks(nusc, scene_token, sample, output_path, pred_data):
+    """ for now, create empty polys.json files """
+    os.makedirs(os.path.join(output_path, 'pred_mask', str(frame_num)), exist_ok=True)
     pred_sample_tokens = []
     frame_num = 0
     # Create list of sample_tokens that correspond to the scene we are converting
@@ -181,37 +297,12 @@ def extract_pred_bounding(nusc, scene_token, sample, output_path, pred_data):
         except:
             continue 
     
-    
-
-
     # Now go through each sample token that corresponds to our scene and import the data taken from pred_data
     for sample_token in pred_sample_tokens:
-        origins = []
-        sizes = []
-        rotations = []
-        annotation_names = []
-        confidences = []
-        velocities = []
-        attributes = []
-
-        # Ego Frame data for conversion
-        sample = nusc.get('sample', sample_token)
-        sensor = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
-        poserecord = nusc.get('ego_pose', sensor['ego_pose_token'])
-        for data in pred_data['results'][str(sample_token)]:
-            box = Box(data['translation'], data['size'], Quaternion(data['rotation']))
-            box.translate(-np.array(poserecord['translation']))
-            box.rotate(Quaternion(poserecord['rotation']).inverse)
-            origins.append(box.center.tolist())
-            sizes.append(data['size'])
-            rotations.append(box.orientation.q.tolist())
-            annotation_names.append(data['detection_name'])
-            confidences.append(int(data['detection_score'] * 100))
-            velocities.append(data['velocity'])
-            attributes.append(data['attribute_name'])
-        # auxiliary data to export predictions
-        aux_data = {"pred_velocity":velocities, "attribute":attributes}
-        dataformat_utils.create_frame_bounding_directory(output_path, frame_num, origins, sizes, rotations, annotation_names, confidences, None, None, predicted=True, data=aux_data)
+        with open(os.path.join(output_path, 'pred_mask', str(frame_num), "polys.json"), "w") as f:
+            json.dump({
+                "polys": [],
+            }, f)
         frame_num += 1
 
 def extract_rgb(nusc, sample, frame_num, target_path):
@@ -302,7 +393,7 @@ def setup_annotation_map(target_path):
     annotation_map['vehicle.truck'] = ['truck']
 
 
-    dataformat_utils.create_annotation_map(target_path, annotation_map)
+    dataformat_utils.create_annotation_map(target_path, annotation_map, mask=True)
 
 
 def convert_dataset(output_path, scene_name, pred_data):
@@ -329,13 +420,13 @@ def convert_dataset(output_path, scene_name, pred_data):
 
     if pred_data != {}:
         print('Extracting predicted bounding boxes...')
-        extract_pred_bounding(nusc, scene_token, sample, output_path, pred_data)
+        extract_pred_masks(nusc, scene_token, sample, output_path, pred_data)
 
 
 
     # Setup progress bar
     frame_count = count_frames(nusc, sample)
-    dataformat_utils.print_progress_bar(0, frame_count)
+    dataformat_utils.print_progress_bar(0, frame_count, scene_name)
 
     setup_annotation_map(output_path)
 
@@ -345,13 +436,13 @@ def convert_dataset(output_path, scene_name, pred_data):
         # Extract all the relevant data from the nuScenes dataset for our scene. The variable 'sample' is the frame
         # Note: This is NOT multithreaded for nuScenes data because each scene is small enough that this runs relatively quickly.
         extract_ego(nusc, sample, frame_num, output_path)
-        extract_bounding(nusc, sample, frame_num, output_path)
+        extract_masks(nusc, sample, frame_num, output_path)
         extract_rgb(nusc, sample, frame_num, output_path)
         extract_lidar(nusc, sample, frame_num, output_path)
         timestamps.append(sample['token'])
         frame_num += 1
         sample = nusc.get('sample', sample['next'])
-        dataformat_utils.print_progress_bar(frame_num, frame_count)
+        dataformat_utils.print_progress_bar(frame_num, frame_count, scene_name)
     dataformat_utils.add_timestamps(output_path, timestamps)
 
     # Store metadata
@@ -361,7 +452,7 @@ def convert_dataset(output_path, scene_name, pred_data):
 if __name__ == "__main__":
 
     # Read in input database and output directory paths
-    (input_path, output_path, scene_names, pred_path, ver_name) = parse_options()
+    (input_path, output_path, scene_names, pred_path,ver_name) = parse_options()
     
     # Validate whether the database path passed in is valid and if the output directory path is valid
     # If the output directory exists, then use that directory. Otherwise, create a new directory at the
@@ -394,7 +485,7 @@ if __name__ == "__main__":
     # Users can then point to the output folder they want to use when running lct.py
     # Setting our output_path to be the parent directory for all these output folders
     for scene_name in scene_names:
-        dataformat_utils.create_lct_directory(output_path, scene_name)
+        dataformat_utils.create_lct_directory(output_path, scene_name, mask=True)
                 
     nusc.list_scenes()
     

@@ -7,7 +7,7 @@ Testing functions to validate LVT directories
 import os
 
 
-def is_lct_directory(path):
+def is_lct_directory(path, mask=False):
     """Tests to see if specified directory conforms to LCT spec
     Args:
         path: path to LCT directory
@@ -20,17 +20,53 @@ def is_lct_directory(path):
     inside_cameras_valid = check_inside_cameras(os.path.join(path, "cameras"))
     pointcloud_exists = os.path.exists(os.path.join(path, "pointcloud"))
     inside_pointcloud_valid = check_inside_pointcloud(os.path.join(path, "pointcloud"))
-    bounding_exists = os.path.exists(os.path.join(path, "bounding"))
-    inside_bounding_valid = check_inside_bounding(os.path.join(path, "bounding"))
     ego_exists = os.path.exists(os.path.join(path, "ego"))
     inside_ego_valid = check_inside_ego(os.path.join(path, "ego"))
-    predicted_exists = os.path.exists(os.path.join(path, "pred_bounding"))
-
+    
+    if mask:
+        mask_exists = os.path.exists(os.path.join(path, "mask"))
+        inside_mask_valid = check_inside_mask(os.path.join(path, "mask"))
+        predicted_exists = os.path.exists(os.path.join(path, "pred_mask"))
+    else:
+        bounding_exists = os.path.exists(os.path.join(path, "bounding"))
+        inside_bounding_valid = check_inside_bounding(os.path.join(path, "bounding"))
+        predicted_exists = os.path.exists(os.path.join(path, "pred_bounding"))
 
     # Overall verification bool
     is_verified = True
-
+    
     # Provides feedback to the user
+    if mask:
+        if not cameras_exist:
+            print("There is no directory named \"cameras\" at the selected path.\n")
+            is_verified = False
+        if not inside_cameras_valid:
+            print("The cameras directory is not properly formatted. \n")
+            is_verified = False
+        if not pointcloud_exists:
+            print("There is no directory named \"pointcloud\" at the selected path. \n")
+            is_verified = False
+        if not inside_pointcloud_valid:
+            print("The pointcloud directory is not properly formatted. \n")
+            is_verified = False
+        if not mask_exists:
+            print("There is no directory named \"mask\" at the selected path. \n")
+            is_verified = False
+        if not inside_mask_valid:
+            print("The mask directory is not properly formatted. \n")
+            is_verified = False
+        if not ego_exists:
+            print("There is no directory named \"ego\" at the selected path. \n")
+            is_verified = False
+        if not inside_ego_valid:
+            print("The ego directory is not properly formatted. \n")
+            is_verified = False
+        if not predicted_exists:
+            print("There is no directory named \"pred_mask\" at the selected path. \n")
+            is_verified = False
+        return is_verified
+
+
     if not cameras_exist:
         print("There is no directory named \"cameras\" at the selected path.\n")
         is_verified = False
@@ -187,5 +223,42 @@ def check_inside_ego(path):
         if not file[-5:] == ".json":
             is_verified = False
             print("There is a file in the ego directory that is not a json file")
+
+    return is_verified
+
+def check_inside_mask(path):
+    """Checks to make sure that all the subdirectories of mask are properly formatted
+       Prints out the reason for invalidity if one exists
+       Args:
+            path: path to the mask directory
+       Returns: 
+            is_verified: false if not valid and true otherwise 
+    """
+
+    is_verified = True
+
+    # Loop through frames
+    for dir in os.listdir(path):
+        has_description = False
+        has_boxes = False
+        # Loop through files in frame
+        if dir == ".DS_Store":
+            continue # check for MacOS
+        for file in os.listdir(os.path.join(path, dir)):
+            if file == ".DS_Store":
+                continue # check for MacOS
+            if has_boxes and has_description:
+                is_verified = False
+                print("directory " + dir + " has multiple description.JSON/boxes.json files")
+            elif file == "description.json":
+                has_description = True
+            elif file == "polys.json":
+                has_boxes = True
+            else:
+                is_verified = False
+        
+        if not has_boxes and not has_description:
+            is_verified = False
+            print("There is not a description.json and a boxes.json file in the " + dir + " directory")
 
     return is_verified

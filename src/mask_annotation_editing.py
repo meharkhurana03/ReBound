@@ -2,6 +2,8 @@
 	functions for editing
 """
 import math
+import time
+import uuid
 
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
@@ -20,10 +22,11 @@ import os
 import sys
 import json
 import cv2
-from lct import Window
+from mask_lct import Window
 import platform
 # import uuid
 import secrets
+from polygon import Polygon
 
 from copy import deepcopy
 
@@ -37,21 +40,26 @@ CAMERA_NAME = 4
 
 class Annotation:
 	# returns created window with all its buttons and whatnot
-	def __init__(self, frame_extrinsic, boxes, pred_boxes, boxes_to_render,
-				 boxes_in_scene, box_indices, annotation_types, path, color_map, pred_color_map,
+	def __init__(self, frame_extrinsic, polys, pred_polys, polys_to_render,
+				 polys_in_scene, poly_indices, annotation_types, path, color_map, pred_color_map,
 				 image_window, image_widget, lct_path, frame_num, camera_sensors):
 		self.cw = gui.Application.instance.create_window("LCT", 400, 800)
 		# self.point_cloud = point_cloud
 		self.image_window = image_window
 		self.image_widget = image_widget
-		self.frame_extrinsic = frame_extrinsic
+		# self.frame_extrinsic = frame_extrinsic
 		self.all_pred_annotations = annotation_types
 		self.all_gt_annotations = list(color_map.keys())
-		self.old_boxes = deepcopy(boxes)
-		self.old_pred_boxes = deepcopy(pred_boxes)
-		self.boxes_to_render = boxes_to_render 		#list of box metadata in scene
-		self.box_indices = box_indices 				#name references for bounding boxes in scene
-		self.boxes_in_scene = boxes_in_scene 		#current bounding box objects in scene
+		# self.old_boxes = deepcopy(boxes)
+		self.old_polys = deepcopy(polys)
+		# self.old_pred_boxes = deepcopy(pred_boxes)
+		self.old_pred_polys = deepcopy(pred_polys)
+		# self.boxes_to_render = boxes_to_render 		#list of box metadata in scene
+		self.polys_to_render = polys_to_render
+		# self.box_indices = box_indices 				#name references for bounding boxes in scene
+		self.poly_indices = poly_indices
+		# self.boxes_in_scene = boxes_in_scene 		#current bounding box objects in scene
+		self.polys_in_scene = polys_in_scene
 		# self.volume_indices = [] 					#name references for clickable cube volumes in scene
 		# self.volumes_in_scene = [] 					#current clickable cube volume objects in scene
 		self.color_map = color_map
@@ -72,12 +80,12 @@ class Annotation:
 		# self.pcd_path = os.path.join(self.lct_path, "pointcloud", self.lidar_sensor_name, "0.pcd")
 		# self.pcd_paths = []
 
-		self.box_selected = None
-		self.box_props_selected = [] #used for determining changes to property fields
-		self.curr_box_depth = 0.0
+		# self.poly_selected = None
+		# self.box_props_selected = [] #used for determining changes to property fields
+		# self.curr_box_depth = 0.0
 		self.previous_index = -1 #-1 denotes, no box selected
 		#used to generate unique ids for boxes and volumes
-		self.box_count = 0
+		self.poly_count = 0
 
 		# #common materials
 		# self.transparent_mat = rendering.MaterialRecord() #invisible material for box volumes
@@ -106,18 +114,26 @@ class Annotation:
 		self.button_down = False
 		self.z_drag = False
 		self.drag_operation = True
-		self.drag_corner = False
-		self.corner_index = 0 # corner index being dragged
+		self.drag_vertex = False
+		self.vertex_index = -1 # corner index being dragged
 		self.drag_edge = False
 		self.edge_index = 0 # edge index being dragged
 		self.curr_x = 0.0 #used for initial mouse position in drags
 		self.curr_y = 0.0
 		self.ctrl_is_down = False
 		self.nudge_sensitivity = 1.0
+		self.adding_poly = False
+		self.poly_selected = None
+		# self.poly_selected_index = -1
+		self.adding_vertex = False
+		self.temp_line = None
+		self.double_click_timer = 0.0
 		
 		# modify temp boxes in this file, then when it's time to save use them to overwrite existing json
-		self.temp_boxes = boxes.copy()
-		self.temp_pred_boxes = pred_boxes.copy()
+		# self.temp_boxes = boxes.copy()
+		self.temp_polys = polys.copy()
+		# self.temp_pred_boxes = pred_boxes.copy()
+		self.temp_pred_polys = pred_polys.copy()
 
 		# used for adding new annotations
 		self.new_annotation_types = []
@@ -132,7 +148,7 @@ class Annotation:
 		layout = gui.Vert(0.50 * em, margin)
 
 		# num of frames available to display
-		frames_available = [entry for entry in os.scandir(os.path.join(self.lct_path, "bounding")) if entry.name != ".DS_Store"] # ignore .DS_Store (MacOS)
+		frames_available = [entry for entry in os.scandir(os.path.join(self.lct_path, "mask")) if entry.name != ".DS_Store"] # ignore .DS_Store (MacOS)
 		self.num_frames = len(frames_available)
 
 		# switch between frames
@@ -166,26 +182,28 @@ class Annotation:
 		self.current_confidence = 0
 
 		# Add combobox to switch between predicted and ground truth
-		# self.bounding_toggle = gui.Combobox()
-		self.bounding_toggle = gui.ListView()
+		# self.mask_toggle = gui.Combobox()
+		self.mask_toggle = gui.ListView()
 		toggle_list = ["Ground Truth", "Predicted"]
 		# toggle_list = ["Predicted", "Ground Truth"]
-		# self.bounding_toggle.add_item("Predicted")
-		# self.bounding_toggle.add_item("Ground Truth")
-		self.bounding_toggle.set_items(toggle_list)
-		# self.bounding_toggle.set_max_visible_items(1)
-		self.bounding_toggle.set_on_selection_changed(self.toggle_bounding)
+		# self.mask_toggle.add_item("Predicted")
+		# self.mask_toggle.add_item("Ground Truth")
+		self.mask_toggle.set_items(toggle_list)
+		# self.mask_toggle.set_max_visible_items(1)
+		self.mask_toggle.set_on_selection_changed(self.toggle_mask)
 
-		bounding_toggle_layout = gui.Horiz(0.50 * em, margin)
-		bounding_toggle_layout.add_child(gui.Label("Toggle Predicted or GT"))
-		bounding_toggle_layout.add_child(self.bounding_toggle)
-		# bounding_toggle_layout.add_child(gui.Vert(0.50 * em, margin))
+		mask_toggle_layout = gui.Horiz(0.50 * em, margin)
+		mask_toggle_layout.add_child(gui.Label("Toggle Predicted or GT"))
+		mask_toggle_layout.add_child(self.mask_toggle)
+		# mask_toggle_layout.add_child(gui.Vert(0.50 * em, margin))
 
-		frames_available = [entry for entry in os.scandir(os.path.join(self.lct_path, "bounding"))]
+		frames_available = [entry for entry in os.scandir(os.path.join(self.lct_path, "mask"))]
 		self.pred_frames = len(frames_available) - 1
 
-		self.propagated_gt_boxes = []
-		self.propagated_pred_boxes = []
+		# self.propagated_gt_boxes = []
+		self.propagated_gt_polys = []
+		# self.propagated_pred_boxes = []
+		self.propagated_pred_polys = []
 
 		# buttons for saving/saving as annotation changes
 		save_annotation_vert = gui.CollapsableVert("Save")
@@ -197,7 +215,7 @@ class Annotation:
 		save_as_button = gui.Button("Save As")
 		save_as_button.set_on_clicked(self.save_as)
 		save_and_prop_horiz = gui.Horiz(0.50 * em, margin)
-		save_and_prop_button = gui.Button("Save and Propagate New Boxes to Next Frame")
+		save_and_prop_button = gui.Button("Save and Propagate New Masks to Next Frame")
 		save_and_prop_to_next = functools.partial(self.save_and_propagate)
 		save_and_prop_button.set_on_clicked(save_and_prop_to_next)
 		# set_velocity_horiz = gui.Horiz(0.50 * em, margin)
@@ -218,9 +236,10 @@ class Annotation:
 		# save_annotation_vert.add_child(set_velocity_horiz)
 
 		add_remove_vert = gui.CollapsableVert("Add/Delete")
-		add_box_button = gui.Button("Add Bounding Box")
-		add_box_button.set_on_clicked(self.place_bounding_box)
-		self.delete_annotation_button = gui.Button("Delete Bounding Box")
+		add_box_button = gui.Button("Add mask")
+		# add_box_button.set_on_clicked(self.place_mask_box)
+		add_box_button.set_on_clicked(self.add_poly)
+		self.delete_annotation_button = gui.Button("Delete mask")
 		self.delete_annotation_button.set_on_clicked(self.delete_annotation)
 		add_remove_horiz = gui.Horiz(0.50 * em, margin)
 		add_remove_horiz.add_child(add_box_button)
@@ -273,7 +292,7 @@ class Annotation:
 		#The data for a selected box will be displayed in these fields
 		#the data fields are accessible to any function to allow easy manipulation during drag operations
 		properties_vert = gui.CollapsableVert("Properties", 0.25 * em, margin)
-		corner_collapse = gui.CollapsableVert("Bounding box corners")
+		# corner_collapse = gui.CollapsableVert("Bounding box corners")
 		# rot_collapse = gui.CollapsableVert("Rotation (specify change in degrees)")
 		# scale_collapse = gui.CollapsableVert("Scale")
 
@@ -332,23 +351,24 @@ class Annotation:
 		
 		# Add confidence set widget to horizontal
 		confidence_set_layout = gui.Horiz()
-		confidence_set_layout.add_child(gui.Label("Set Pred box as GT:"))
+		confidence_set_layout.add_child(gui.Label("Set Pred mask as GT:"))
 		confidence_set_layout.add_child(self.confidence_set)
 		conf_vert.add_child(confidence_set_layout)
 		
-		corner_horiz1 = gui.Horiz(1 * em)
-		corner_horiz1.add_child(gui.Label("x1:"))
-		corner_horiz1.add_child(self.corner_x1)
-		corner_horiz1.add_child(gui.Label("y1:"))
-		corner_horiz1.add_child(self.corner_y1)
-		corner_collapse.add_child(corner_horiz1)
+		# corner_horiz1 = gui.Horiz(1 * em)
+		# corner_horiz1.add_child(gui.Label("x1:"))
+		# corner_horiz1.add_child(self.corner_x1)
+		# corner_horiz1.add_child(gui.Label("y1:"))
+		# corner_horiz1.add_child(self.corner_y1)
+		# corner_collapse.add_child(corner_horiz1)
 
-		corner_horiz2 = gui.Horiz(1 * em)
-		corner_horiz2.add_child(gui.Label("x2:"))
-		corner_horiz2.add_child(self.corner_x2)
-		corner_horiz2.add_child(gui.Label("y2:"))
-		corner_horiz2.add_child(self.corner_y2)
-		corner_collapse.add_child(corner_horiz2)
+		# corner_horiz2 = gui.Horiz(1 * em)
+		# corner_horiz2.add_child(gui.Label("x2:"))
+		# corner_horiz2.add_child(self.corner_x2)
+		# corner_horiz2.add_child(gui.Label("y2:"))
+		# corner_horiz2.add_child(self.corner_y2)
+		# corner_collapse.add_child(corner_horiz2)
+
 
 		# rot_horiz = gui.Horiz(0.5 * em)
 		# rot_horiz.add_child(gui.Label("X:"))
@@ -371,7 +391,7 @@ class Annotation:
 		properties_vert.add_child(tracking_vert)
 		properties_vert.add_child(annot_vert)
 		properties_vert.add_child(conf_vert)
-		properties_vert.add_child(corner_collapse)
+		# properties_vert.add_child(corner_collapse)
 
 		# button for exiting annotation mode, set_on_click in lct.py for a cleaner restart
 		exit_annotation_horiz = gui.Horiz(0.50 * em, margin)
@@ -384,7 +404,7 @@ class Annotation:
 		layout.add_child(frame_switch_layout)
 		# layout.add_child(center_horiz)
 		# layout.add_child(confidence_select_layout)
-		layout.add_child(bounding_toggle_layout)
+		layout.add_child(mask_toggle_layout)
 		layout.add_child(add_remove_vert)
 		# layout.add_child(tool_vert)
 		layout.add_child(toggle_camera_vert)
@@ -394,7 +414,7 @@ class Annotation:
 
 		self.cw.add_child(layout)
 		self.update_poses()
-		self.update_props()
+		# self.update_props()
 		self.update()
 
 		# Event handlers
@@ -420,47 +440,53 @@ class Annotation:
 	# 	return box.get_center()
 
 	# onclick, places down a bounding box on the cursor, then reenables mouse functionality
-	def place_bounding_box(self):
-		# Random values are placeholders until we implement the desired values
-		corners = [
-			self.image_w / 2 - 50,
-			self.image_h / 2 - 50,
-			self.image_w / 2 + 50,
-			self.image_h / 2 + 50
-		]
-		# corners = self.boxes_to_render[0][CORNERS]
-		print('corners: ', corners)
+	def add_poly(self):
+		self.adding_poly = True
+		
+		
+		# self.previous_index = len(self.boxes_to_render)
+		self.previous_index = len(self.polys_to_render)
 
-		self.previous_index = len(self.boxes_to_render)
 		if self.show_gt:
 			color = self.color_map[self.all_gt_annotations[0]]
 		else:
 			color = self.pred_color_map[self.all_pred_annotations[0]]
 		
 		if self.show_gt:
-			# uuid_str = str(uuid.uuid4())
 			uuid_str = secrets.token_hex(16)
-			box = self.create_box_metadata(corners, self.all_gt_annotations[0], 101, uuid_str, self.rgb_sensor_name, 0, {"propagate": True,})
-			self.temp_boxes['boxes'].append(box)
-			render_box = [box['bbox_corners'], box['annotation'], box['confidence'], color, box['camera']]
-			self.boxes_to_render.append(render_box)
+			render_poly = Polygon([], self.all_gt_annotations[0], color, 101, uuid_str, self.rgb_sensor_name, 0, {"propagate": True,})
+		# 	self.temp_boxes['boxes'].append(box)
+			self.temp_polys['polys'].append(render_poly.create_poly_metadata())
+			# render_box = [box['bbox_corners'], box['annotation'], box['confidence'], color, box['camera']]
+			# render_poly = [poly.vertices, poly.annotation, poly.confidence, color, poly.camera_name]
+		# 	self.boxes_to_render.append(render_box)
+			# self.polys_to_render.append(render_poly)
 		else:
-			# uuid_str = str(uuid.uuid4())
+		# 	# uuid_str = str(uuid.uuid4())
 			uuid_str = secrets.token_hex(16)
-			box = self.create_box_metadata(corners, self.all_pred_annotations[0], 101, uuid_str, self.rgb_sensor_name, 0, {"propagate": True,})
-			self.temp_pred_boxes['boxes'].append(box)
-			render_box = [box['bbox_corners'], box['annotation'], box['confidence'], color, box['camera']]
-			self.boxes_to_render.append(render_box)
+			render_poly = Polygon([], self.all_pred_annotations[0], color, 101, uuid_str, self.rgb_sensor_name, 0, {"propagate": True,})
+			# box = self.create_poly_metadata([], self.all_pred_annotations[0], 101, uuid_str, self.rgb_sensor_name, 0, {"propagate": True,})
+		# 	self.temp_pred_boxes['boxes'].append(box)
+			self.temp_pred_polys['polys'].append(render_poly.create_poly_metadata(pred=True))
+		# 	render_box = [box['bbox_corners'], box['annotation'], box['confidence'], color, box['camera']]
+			# render_poly = [poly.vertices, poly.annotation, poly.confidence, color, poly.camera_name]
+		# 	self.boxes_to_render.append(render_box)
+			# self.polys_to_render.append(render_poly)
 
 		self.tracking_id_set.text_value = uuid_str
-		# self.scene_widget.scene.add_geometry(bbox_name, bounding_box, self.line_mat) #Adds the box to the scene
-		# self.scene_widget.scene.add_geometry(volume_name, volume_to_add, self.transparent_mat)#Adds the volume
-		self.box_selected = render_box
+		# # self.scene_widget.scene.add_geometry(bbox_name, bounding_box, self.line_mat) #Adds the box to the scene
+		# # self.scene_widget.scene.add_geometry(volume_name, volume_to_add, self.transparent_mat)#Adds the volume
+		# self.poly_selected = render_box
+		self.poly_selected = render_poly
+		self.poly_indices.append(self.previous_index)
+		self.poly_count += 1
 
-		# might cause an error in Windows OS
-		self.cw.post_redraw()
-		self.update_image()
-		self.box_count += 1
+		self.polys_to_render.append(self.poly_selected)
+
+		# # might cause an error in Windows OS
+		# self.cw.post_redraw()
+		# self.update_image()
+		# self.box_count += 1
 
 	# # Takes the frame x and y coordinates and flattens the 3D scene into a 2D depth image
 	# # The X and Y coordinates select the depth value from the depth image and converts it into a depth value
@@ -501,188 +527,157 @@ class Annotation:
 			return image_x, image_y
 
 		# print(event.type)
-		if event.type == gui.MouseEvent.Type.BUTTON_DOWN:
-		# and event.is_modifier_down(gui.KeyModifier.SHIFT):
-			print("button down with ctrl")
-			self.button_down = True
-			def is_click_on_box_boundary(mouse_x, mouse_y, x1, y1, x2, y2):
-				# check if the click is on the box boundary
-				image_x, image_y = transform_mouse_to_image(widget, mouse_x, mouse_y)
-
-				# # scale x1, y1, x2, y2 to image size
-				# x1 = x1 / self.image_w * i_width
-				# y1 = y1 / self.image_h * i_height
-				# x2 = x2 / self.image_w * i_width
-				# y2 = y2 / self.image_h * i_height
-
-				print('image_x: ', image_x, 'image_y: ', image_y)
-				print(x1, y1, x2, y2)
-				if 	 (image_x >= x1 - 3 and image_x <= x1 + 3 and image_y >= y1 - 3 and image_y <= y2 + 3):
-					# edge 1, left
-					return 1
-				elif (image_x >= x2 - 3 and image_x <= x2 + 3 and image_y >= y1 - 3 and image_y <= y2 + 3):
-					# edge 3, right
-					return 3
-				elif (image_x >= x1 - 3 and image_x <= x2 + 3 and image_y >= y1 - 3 and image_y <= y1 + 3):
-					# edge 2, top
-					return 2
-				elif (image_x >= x1 - 3 and image_x <= x2 + 3 and image_y >= y2 - 3 and image_y <= y2 + 3):
-					# edge 4, bottom
-					return 4
-				else:
-					return 0
-			
+		if event.type == gui.MouseEvent.Type.BUTTON_DOWN and self.adding_poly and not self.adding_vertex:
+			print("button down")
 			# get the mouse position in the scene
 			mouse_x = event.x
 			mouse_y = event.y
 
-			def is_click_on_box_corners(mouse_x, mouse_y, x1, y1, x2, y2):
-				# check if the click is on the box boundary
-				image_x, image_y = transform_mouse_to_image(widget, mouse_x, mouse_y)
+			# get the mouse position in the image
+			image_x, image_y = transform_mouse_to_image(widget, mouse_x, mouse_y)
 
-				# # scale x1, y1, x2, y2 to image size
-				# x1 = x1 / self.image_w * i_width
-				# y1 = y1 / self.image_h * i_height
-				# x2 = x2 / self.image_w * i_width
-				# y2 = y2 / self.image_h * i_height
+			self.poly_selected.add_vertex([image_x, image_y])
 
-				print('image_x: ', image_x, 'image_y: ', image_y)
-				print(x1, y1, x2, y2)
-				if 	 (image_x >= x1 - 5 and image_x <= x1 + 5 and image_y >= y1 - 5 and image_y <= y1 + 5):
-					# corner 1, top left
-					return 1
-				elif (image_x >= x2 - 5 and image_x <= x2 + 5 and image_y >= y2 - 5 and image_y <= y2 + 5):
-					# corner 3, bottom right
-					return 3
-				elif (image_x >= x2 - 5 and image_x <= x2 + 5 and image_y >= y1 - 5 and image_y <= y1 + 5):
-					# corner 2, top right
-					return 2
-				elif (image_x >= x1 - 5 and image_x <= x1 + 5 and image_y >= y2 - 5 and image_y <= y2 + 5):
-					# corner 4, bottom left
-					return 4
-				else:
-					return 0
-			
-			if not self.drag_corner and self.previous_index != -1:
-				# get the mouse position in the scene
-				mouse_x = event.x
-				mouse_y = event.y
+			self.adding_vertex = True
 
-				box = self.boxes_to_render[self.previous_index]
-				# get the box corners
-				corners = box[CORNERS]
+			self.cw.post_redraw()
+			self.update_props()
+			self.update_image()
 
-				corner_id = is_click_on_box_corners(mouse_x, mouse_y, corners[0], corners[1], corners[2], corners[3])
-				if corner_id:
-					self.drag_corner = True
-					self.corner_index = corner_id
-					print('corner drag started')
+			return gui.Widget.EventCallbackResult.HANDLED
+		
+		if event.type == gui.MouseEvent.Type.MOVE and self.adding_poly and self.adding_vertex:
+			print("move")
+			# get the mouse position in the scene
+			mouse_x = event.x
+			mouse_y = event.y
+
+			# get the mouse position in the image
+			image_x, image_y = transform_mouse_to_image(widget, mouse_x, mouse_y)
+
+			# render a line from the previous vertex to the current mouse position
+			print(self.poly_selected.vertices[-1][0], self.poly_selected.vertices[-1][1])
+			self.temp_line = [
+				(int(self.poly_selected.vertices[-1][0]),
+				int(self.poly_selected.vertices[-1][1])),
+				(int(image_x),
+				int(image_y))
+			]
+
+			self.cw.post_redraw()
+			self.update_props()
+			self.update_image()
+
+			return gui.Widget.EventCallbackResult.HANDLED
+		
+		if event.type == gui.MouseEvent.Type.BUTTON_DOWN and self.adding_poly and self.adding_vertex and time.time() - self.double_click_timer < 0.5:
+			# self.poly_selected.add_vertex([image_x, image_y])
+			self.double_click_timer = 0.0
+
+			self.adding_poly = False
+			self.adding_vertex = False
+			self.temp_line = None
+
+			self.cw.post_redraw()
+			self.update_props()
+			self.update_image()
+
+			return gui.Widget.EventCallbackResult.HANDLED
+		
+		if event.type == gui.MouseEvent.Type.BUTTON_DOWN and self.adding_poly and self.adding_vertex:
+			print("button down and adding vertex")
+			# get the mouse position in the scene
+			mouse_x = event.x
+			mouse_y = event.y
+
+			# get the mouse position in the image
+			image_x, image_y = transform_mouse_to_image(widget, mouse_x, mouse_y)
+
+			# # render a line from the previous vertex to the current mouse position
+			# self.temp_line = [self.poly_selected.vertices[-1], [image_x, image_y]]
+
+			self.poly_selected.add_vertex([image_x, image_y])
+			self.double_click_timer = time.time()
+
+			self.cw.post_redraw()
+			self.update_props()
+			self.update_image()
+
+			return gui.Widget.EventCallbackResult.HANDLED
+		
+		if event.type == gui.MouseEvent.Type.BUTTON_DOWN:
+			# select the polygon that was clicked on
+			print("button down")
+			self.button_down = True
+
+			# get the mouse position in the scene
+			mouse_x = event.x
+			mouse_y = event.y
+
+			# get the mouse position in the image
+			image_x, image_y = transform_mouse_to_image(widget, mouse_x, mouse_y)
+
+			if not self.drag_vertex and self.previous_index != -1:
+				poly = self.polys_to_render[self.previous_index]
+
+				is_vertex = poly.is_click_on_poly_vertex([image_x, image_y])
+
+				if is_vertex != -1:
+					self.drag_vertex = True
+					self.vertex_index = is_vertex
+					print('vertex drag started')
 					return gui.Widget.EventCallbackResult.CONSUMED #TODO: check if this is the correct return value
 			
-			if not self.drag_edge and self.previous_index != -1:
-				# get the mouse position in the scene
-				mouse_x = event.x
-				mouse_y = event.y
+			# if not self.drag_edge and self.previous_index != -1:
+			# 	poly = self.polys_to_render[self.previous_index]
 
-				box = self.boxes_to_render[self.previous_index]
-				# get the box corners
-				corners = box[CORNERS]
+			# 	is_edge = poly.is_click_on_poly_boundary(image_x, image_y)
 
-				edge_id = is_click_on_box_boundary(mouse_x, mouse_y, corners[0], corners[1], corners[2], corners[3])
-				if edge_id:
-					self.drag_edge = True
-					self.edge_index = edge_id
-					print('edge drag started')
-					self.curr_x = mouse_x
-					self.curr_y = mouse_y
-					return gui.Widget.EventCallbackResult.CONSUMED
-
-			for idx, box in enumerate(self.boxes_to_render):
-				if box[CAMERA_NAME] == self.rgb_sensor_name:
-					# get the box corners
-					corners = box[CORNERS]
-
-					# print(mouse_x, mouse_y, corners[0], corners[1], corners[2], corners[3], widget.frame.width, widget.frame.height)
-
-					if is_click_on_box_boundary(mouse_x, mouse_y, corners[0], corners[1], corners[2], corners[3]):
-						self.select_box(idx)
-						print('box selected')
-				
-						return gui.Widget.EventCallbackResult.HANDLED
-			
-			self.deselect_box()
+			# 	if is_edge != -1:
+			# 		self.drag_edge = True
+			# 		print('edge drag started')
+			# 		return gui.Widget.EventCallbackResult.CONSUMED
+		
+			for idx, poly in enumerate(self.polys_to_render):
+				if poly.camera_name == self.rgb_sensor_name:
+					if poly.is_click_on_poly_boundary([image_x, image_y]):
+						# self.previous_index = idx
+						# self.poly_selected = poly
+						# self.poly_indices.append(idx)
+						# self.poly_count += 1
+						# self.update_props()
+						# self.update_image()
+						self.select_poly(idx)
+						return gui.Widget.EventCallbackResult.CONSUMED
+		
+			self.deselect_poly()
 			return gui.Widget.EventCallbackResult.HANDLED
-
-		#If shift button is down during click event, indicates potential drag operation
-		# elif event.is_modifier_down(gui.KeyModifier.SHIFT) and self.previous_index != -1:
-		# 	print('shift down')
-		# 	# current_box = self.previous_index
-		# 	# scene_camera = self.scene_widget.scene.camera
-		# 	# volume_to_drag = self.volumes_in_scene[current_box]
-		# 	# volume_name = self.volume_indices[current_box]
-		# 	# box_to_drag = self.boxes_in_scene[current_box]
-		# 	# box_name = self.box_indices[current_box]
-			
-
-		# 	#otherwise it's the drag part of the event, continually translate current box by the difference between
-		# 	#start position and current position, multiply by scaling factor due to size of grid
+		
 		if event.type == gui.MouseEvent.Type.DRAG:
-			# print('drag continued')
-			print('box drag continued')
-		# else:
+			# print("drag")
+			# get the mouse position in the scene
 			curr_mouse_x = event.x
 			curr_mouse_y = event.y
 
-			box = self.boxes_to_render[self.previous_index]
-			# get the box corners
-			corners = box[CORNERS]
-
+			# get the mouse position in the image
 			curr_image_x, curr_image_y = transform_mouse_to_image(widget, curr_mouse_x, curr_mouse_y)
 
-			if self.drag_corner:
-				if self.corner_index == 1:
-					# top left corner
-					corners[0] = curr_image_x
-					corners[1] = curr_image_y
-				elif self.corner_index == 2:
-					# top right corner
-					corners[2] = curr_image_x
-					corners[1] = curr_image_y
-				elif self.corner_index == 3:
-					# bottom right corner
-					corners[2] = curr_image_x
-					corners[3] = curr_image_y
-				elif self.corner_index == 4:
-					# bottom left corner
-					corners[0] = curr_image_x
-					corners[3] = curr_image_y
-
-				self.boxes_to_render[self.previous_index][CORNERS] = corners
-
-			elif self.drag_edge:
-				# TODO: change drag edge behavior?
-				mouse_x = event.x
-				mouse_y = event.y
-
-				old_mouse_x = self.curr_x
-				old_mouse_y = self.curr_y
-
-				mouse_delta_x = mouse_x - old_mouse_x
-				mouse_delta_y = mouse_y - old_mouse_y
-
-				image_delta_x, image_delta_y = transform_mouse_to_image(widget, mouse_delta_x, mouse_delta_y, delta=True)
-
-				corners[0] = corners[0] + image_delta_x
-				corners[1] = corners[1] + image_delta_y
-				corners[2] = corners[2] + image_delta_x
-				corners[3] = corners[3] + image_delta_y
-
-				self.curr_x = mouse_x
-				self.curr_y = mouse_y
-
-				self.boxes_to_render[self.previous_index][CORNERS] = corners
+			if self.drag_vertex:
+				print('dragging vertex')
+				# self.poly_selected.move_vertex(self.vertex_index, image_x, image_y)
+				# self.update_props()
+				# self.update_image()
+				# return gui.Widget.EventCallbackResult.CONSUMED
+				self.poly_selected.move_vertex(self.vertex_index, [curr_image_x, curr_image_y])
 
 			
+			# if self.drag_edge:
+			# 	print('dragging edge')
+			# 	self.poly_selected.move_edge(self.vertex_index, image_x, image_y)
+			# 	self.update_props()
+			# 	self.update_image()
+			# 	return gui.Widget.EventCallbackResult.CONSUMED
+
 			self.update_props()
 			self.update_image()
 
@@ -691,16 +686,219 @@ class Annotation:
 		elif event.type == gui.MouseEvent.Type.BUTTON_UP:
 			print('drag ended')
 			self.button_down = False
-			self.drag_corner = False
-			self.corner_index = 0
-			self.drag_edge = False
-			self.edge_index = 0
+			self.drag_vertex = False
+			self.vertex_index = -1
+			# self.drag_edge = False
+			# self.edge_index = 0
 			print('box drag ended')
 			
 
 			return gui.Widget.EventCallbackResult.CONSUMED
 
 		return gui.Widget.EventCallbackResult.IGNORED
+		
+
+		
+
+
+		# if event.type == gui.MouseEvent.Type.BUTTON_DOWN:
+		# # and event.is_modifier_down(gui.KeyModifier.SHIFT):
+		# 	print("button down with ctrl")
+		# 	self.button_down = True
+		# 	def is_click_on_box_boundary(mouse_x, mouse_y, x1, y1, x2, y2):
+		# 		# check if the click is on the box boundary
+		# 		image_x, image_y = transform_mouse_to_image(widget, mouse_x, mouse_y)
+
+		# 		# # scale x1, y1, x2, y2 to image size
+		# 		# x1 = x1 / self.image_w * i_width
+		# 		# y1 = y1 / self.image_h * i_height
+		# 		# x2 = x2 / self.image_w * i_width
+		# 		# y2 = y2 / self.image_h * i_height
+
+		# 		print('image_x: ', image_x, 'image_y: ', image_y)
+		# 		print(x1, y1, x2, y2)
+		# 		if 	 (image_x >= x1 - 3 and image_x <= x1 + 3 and image_y >= y1 - 3 and image_y <= y2 + 3):
+		# 			# edge 1, left
+		# 			return 1
+		# 		elif (image_x >= x2 - 3 and image_x <= x2 + 3 and image_y >= y1 - 3 and image_y <= y2 + 3):
+		# 			# edge 3, right
+		# 			return 3
+		# 		elif (image_x >= x1 - 3 and image_x <= x2 + 3 and image_y >= y1 - 3 and image_y <= y1 + 3):
+		# 			# edge 2, top
+		# 			return 2
+		# 		elif (image_x >= x1 - 3 and image_x <= x2 + 3 and image_y >= y2 - 3 and image_y <= y2 + 3):
+		# 			# edge 4, bottom
+		# 			return 4
+		# 		else:
+		# 			return 0
+			
+		# 	# get the mouse position in the scene
+		# 	mouse_x = event.x
+		# 	mouse_y = event.y
+
+		# 	def is_click_on_box_corners(mouse_x, mouse_y, x1, y1, x2, y2):
+		# 		# check if the click is on the box boundary
+		# 		image_x, image_y = transform_mouse_to_image(widget, mouse_x, mouse_y)
+
+		# 		# # scale x1, y1, x2, y2 to image size
+		# 		# x1 = x1 / self.image_w * i_width
+		# 		# y1 = y1 / self.image_h * i_height
+		# 		# x2 = x2 / self.image_w * i_width
+		# 		# y2 = y2 / self.image_h * i_height
+
+		# 		print('image_x: ', image_x, 'image_y: ', image_y)
+		# 		print(x1, y1, x2, y2)
+		# 		if 	 (image_x >= x1 - 5 and image_x <= x1 + 5 and image_y >= y1 - 5 and image_y <= y1 + 5):
+		# 			# corner 1, top left
+		# 			return 1
+		# 		elif (image_x >= x2 - 5 and image_x <= x2 + 5 and image_y >= y2 - 5 and image_y <= y2 + 5):
+		# 			# corner 3, bottom right
+		# 			return 3
+		# 		elif (image_x >= x2 - 5 and image_x <= x2 + 5 and image_y >= y1 - 5 and image_y <= y1 + 5):
+		# 			# corner 2, top right
+		# 			return 2
+		# 		elif (image_x >= x1 - 5 and image_x <= x1 + 5 and image_y >= y2 - 5 and image_y <= y2 + 5):
+		# 			# corner 4, bottom left
+		# 			return 4
+		# 		else:
+		# 			return 0
+			
+		# 	if not self.drag_corner and self.previous_index != -1:
+		# 		# get the mouse position in the scene
+		# 		mouse_x = event.x
+		# 		mouse_y = event.y
+
+		# 		box = self.boxes_to_render[self.previous_index]
+		# 		# get the box corners
+		# 		corners = box[CORNERS]
+
+		# 		corner_id = is_click_on_box_corners(mouse_x, mouse_y, corners[0], corners[1], corners[2], corners[3])
+		# 		if corner_id:
+		# 			self.drag_corner = True
+		# 			self.corner_index = corner_id
+		# 			print('corner drag started')
+		# 			return gui.Widget.EventCallbackResult.CONSUMED #TODO: check if this is the correct return value
+			
+		# 	if not self.drag_edge and self.previous_index != -1:
+		# 		# get the mouse position in the scene
+		# 		mouse_x = event.x
+		# 		mouse_y = event.y
+
+		# 		box = self.boxes_to_render[self.previous_index]
+		# 		# get the box corners
+		# 		corners = box[CORNERS]
+
+		# 		edge_id = is_click_on_box_boundary(mouse_x, mouse_y, corners[0], corners[1], corners[2], corners[3])
+		# 		if edge_id:
+		# 			self.drag_edge = True
+		# 			self.edge_index = edge_id
+		# 			print('edge drag started')
+		# 			self.curr_x = mouse_x
+		# 			self.curr_y = mouse_y
+		# 			return gui.Widget.EventCallbackResult.CONSUMED
+
+		# 	for idx, box in enumerate(self.boxes_to_render):
+		# 		if box[CAMERA_NAME] == self.rgb_sensor_name:
+		# 			# get the box corners
+		# 			corners = box[CORNERS]
+
+		# 			# print(mouse_x, mouse_y, corners[0], corners[1], corners[2], corners[3], widget.frame.width, widget.frame.height)
+
+		# 			if is_click_on_box_boundary(mouse_x, mouse_y, corners[0], corners[1], corners[2], corners[3]):
+		# 				self.select_poly(idx)
+		# 				print('box selected')
+				
+		# 				return gui.Widget.EventCallbackResult.HANDLED
+			
+		# 	self.deselect_poly()
+		# 	return gui.Widget.EventCallbackResult.HANDLED
+
+		# #If shift button is down during click event, indicates potential drag operation
+		# # elif event.is_modifier_down(gui.KeyModifier.SHIFT) and self.previous_index != -1:
+		# # 	print('shift down')
+		# # 	# current_box = self.previous_index
+		# # 	# scene_camera = self.scene_widget.scene.camera
+		# # 	# volume_to_drag = self.volumes_in_scene[current_box]
+		# # 	# volume_name = self.volume_indices[current_box]
+		# # 	# box_to_drag = self.boxes_in_scene[current_box]
+		# # 	# box_name = self.box_indices[current_box]
+			
+
+		# # 	#otherwise it's the drag part of the event, continually translate current box by the difference between
+		# # 	#start position and current position, multiply by scaling factor due to size of grid
+		# if event.type == gui.MouseEvent.Type.DRAG:
+		# 	# print('drag continued')
+		# 	print('box drag continued')
+		# # else:
+		# 	curr_mouse_x = event.x
+		# 	curr_mouse_y = event.y
+
+		# 	box = self.boxes_to_render[self.previous_index]
+		# 	# get the box corners
+		# 	corners = box[CORNERS]
+
+		# 	curr_image_x, curr_image_y = transform_mouse_to_image(widget, curr_mouse_x, curr_mouse_y)
+
+		# 	if self.drag_corner:
+		# 		if self.corner_index == 1:
+		# 			# top left corner
+		# 			corners[0] = curr_image_x
+		# 			corners[1] = curr_image_y
+		# 		elif self.corner_index == 2:
+		# 			# top right corner
+		# 			corners[2] = curr_image_x
+		# 			corners[1] = curr_image_y
+		# 		elif self.corner_index == 3:
+		# 			# bottom right corner
+		# 			corners[2] = curr_image_x
+		# 			corners[3] = curr_image_y
+		# 		elif self.corner_index == 4:
+		# 			# bottom left corner
+		# 			corners[0] = curr_image_x
+		# 			corners[3] = curr_image_y
+
+		# 		self.boxes_to_render[self.previous_index][CORNERS] = corners
+
+		# 	elif self.drag_edge:
+		# 		# TODO: change drag edge behavior?
+		# 		mouse_x = event.x
+		# 		mouse_y = event.y
+
+		# 		old_mouse_x = self.curr_x
+		# 		old_mouse_y = self.curr_y
+
+		# 		mouse_delta_x = mouse_x - old_mouse_x
+		# 		mouse_delta_y = mouse_y - old_mouse_y
+
+		# 		image_delta_x, image_delta_y = transform_mouse_to_image(widget, mouse_delta_x, mouse_delta_y, delta=True)
+
+		# 		corners[0] = corners[0] + image_delta_x
+		# 		corners[1] = corners[1] + image_delta_y
+		# 		corners[2] = corners[2] + image_delta_x
+		# 		corners[3] = corners[3] + image_delta_y
+
+		# 		self.curr_x = mouse_x
+		# 		self.curr_y = mouse_y
+
+		# 		self.boxes_to_render[self.previous_index][CORNERS] = corners
+
+			
+		# 	self.update_props()
+		# 	self.update_image()
+
+		# 	gui.Widget.EventCallbackResult.HANDLED
+
+		# elif event.type == gui.MouseEvent.Type.BUTTON_UP:
+		# 	print('drag ended')
+		# 	self.button_down = False
+		# 	self.drag_corner = False
+		# 	self.corner_index = 0
+		# 	self.drag_edge = False
+		# 	self.edge_index = 0
+		# 	print('box drag ended')
+			
+
+		# 	return gui.Widget.EventCallbackResult.CONSUMED
 	
 	
 		# Handles key events
@@ -714,48 +912,54 @@ class Annotation:
 			return gui.Widget.EventCallbackResult.HANDLED
 
 		elif event.type == event.Type.DOWN:
-
+			# DEL key
 			if event.key == 127:
 				self.delete_annotation()
 				return gui.Widget.EventCallbackResult.CONSUMED
+			# CTRL + d
 			elif event.key == 100 and self.ctrl_is_down:
-				self.deselect_box()
+				self.deselect_poly()
 				return gui.Widget.EventCallbackResult.CONSUMED
-			elif self.previous_index != -1:
-				if event.key == 119:
-					z_location = self.box_props_selected[2] + self.nudge_sensitivity
-					self.property_change_handler(z_location, "trans", "z")
-					return gui.Widget.EventCallbackResult.CONSUMED
-				elif event.key == 115:
-					z_location = self.box_props_selected[2] + (-1 * self.nudge_sensitivity)
-					self.property_change_handler(z_location, "trans", "z")
-					return gui.Widget.EventCallbackResult.CONSUMED
-				elif event.key == 97:
-					self.property_change_handler(self.nudge_sensitivity, "rot", "z")
-					return gui.Widget.EventCallbackResult.CONSUMED
-				elif event.key == 100:
-					self.property_change_handler(-1 * self.nudge_sensitivity, "rot", "z")
-					return gui.Widget.EventCallbackResult.CONSUMED
-				elif event.key == 265:
-					y_location = self.box_props_selected[1] + self.nudge_sensitivity
-					self.property_change_handler(y_location, "trans", "y")
-					return gui.Widget.EventCallbackResult.CONSUMED
-				elif event.key == 266:
-					y_location = self.box_props_selected[1] + (-1 * self.nudge_sensitivity)
-					self.property_change_handler(y_location, "trans", "y")
-					return gui.Widget.EventCallbackResult.CONSUMED
-				elif event.key == 263:
-					x_location = self.box_props_selected[0] + self.nudge_sensitivity
-					self.property_change_handler(x_location, "trans", "x")
-					return gui.Widget.EventCallbackResult.CONSUMED
-				elif event.key == 264:
-					x_location = self.box_props_selected[0] + (-1 * self.nudge_sensitivity)
-					self.property_change_handler(x_location, "trans", "x")
-					return gui.Widget.EventCallbackResult.CONSUMED
+			# CTRL + a
+			elif event.key == 97 and self.ctrl_is_down:
+				self.add_poly()
+				return gui.Widget.EventCallbackResult.CONSUMED
+			# elif self.previous_index != -1:
+			# 	# CTRL + w
+			# 	if event.key == 119:
+			# 		z_location = self.box_props_selected[2] + self.nudge_sensitivity
+			# 		self.property_change_handler(z_location, "trans", "z")
+			# 		return gui.Widget.EventCallbackResult.CONSUMED
+			# 	elif event.key == 115:
+			# 		z_location = self.box_props_selected[2] + (-1 * self.nudge_sensitivity)
+			# 		self.property_change_handler(z_location, "trans", "z")
+			# 		return gui.Widget.EventCallbackResult.CONSUMED
+			# 	elif event.key == 97:
+			# 		self.property_change_handler(self.nudge_sensitivity, "rot", "z")
+			# 		return gui.Widget.EventCallbackResult.CONSUMED
+			# 	elif event.key == 100:
+			# 		self.property_change_handler(-1 * self.nudge_sensitivity, "rot", "z")
+			# 		return gui.Widget.EventCallbackResult.CONSUMED
+			# 	elif event.key == 265:
+			# 		y_location = self.box_props_selected[1] + self.nudge_sensitivity
+			# 		self.property_change_handler(y_location, "trans", "y")
+			# 		return gui.Widget.EventCallbackResult.CONSUMED
+			# 	elif event.key == 266:
+			# 		y_location = self.box_props_selected[1] + (-1 * self.nudge_sensitivity)
+			# 		self.property_change_handler(y_location, "trans", "y")
+			# 		return gui.Widget.EventCallbackResult.CONSUMED
+			# 	elif event.key == 263:
+			# 		x_location = self.box_props_selected[0] + self.nudge_sensitivity
+			# 		self.property_change_handler(x_location, "trans", "x")
+			# 		return gui.Widget.EventCallbackResult.CONSUMED
+			# 	elif event.key == 264:
+			# 		x_location = self.box_props_selected[0] + (-1 * self.nudge_sensitivity)
+			# 		self.property_change_handler(x_location, "trans", "x")
+			# 		return gui.Widget.EventCallbackResult.CONSUMED
 
 		return gui.Widget.EventCallbackResult.IGNORED
-	#deselect_box removes current properties, un-highlights box, and sets selected box back to -1
-	def deselect_box(self):
+	#deselect_poly removes current properties, un-highlights box, and sets selected box back to -1
+	def deselect_poly(self):
 		# if self.previous_index != -1:
 			# self.scene_widget.scene.modify_geometry_material(self.box_indices[self.previous_index], self.line_mat)
 			# self.scene_widget.scene.show_geometry(self.coord_frame, False)
@@ -766,40 +970,44 @@ class Annotation:
 		# TODO: change the show_trajectory function for 2D
 		# self.show_trajectory(False)
 		# self.point_cloud.post_redraw()
-		self.update_boxes_to_render()
+		# self.update_boxes_to_render()
+		self.update_polys_to_render()
 
 		self.previous_index = -1
 		self.current_confidence = 0
-		self.box_selected = None
+		self.poly_selected = None
 		self.update_props()
 		# self.update_poses()
 		self.update_image()
 
-	#select_box takes a box name (string) and checks to see if a previous box has been selected
+	#select_poly takes a box name (string) and checks to see if a previous box has been selected
 	#then it modifies the appropriate line widths to select and deselect boxes
 	#it also moves the coordinate frame to the selected box
-	def select_box(self, box_index):
+	def select_poly(self, poly_index):
 		if self.previous_index != -1:  # if not first box clicked "deselect" previous box
-			self.deselect_box()
+			self.deselect_poly()
 			# self.scene_widget.scene.modify_geometry_material(self.box_indices[self.previous_index], self.line_mat)
 
 		# rendering.Open3DScene.remove_geometry(self.scene_widget.scene, self.coord_frame)
-		self.previous_index = box_index
-		print("box selected: ", box_index)
-		print(len(self.boxes_to_render))
-		self.box_selected = self.boxes_to_render[box_index]
+		self.previous_index = poly_index
+		print("poly selected: ", poly_index)
+		print(len(self.polys_to_render))
+		self.poly_selected = self.polys_to_render[poly_index]
 		
 		self.tracking_id_set.enabled = True
 		if self.show_gt:
 			try:
 				self.current_confidence = 101
-				self.tracking_id_set.text_value = self.temp_boxes["boxes"][box_index]["id"]
+				# self.tracking_id_set.text_value = self.temp_boxes["boxes"][box_index]["id"]
+				self.tracking_id_set.text_value = self.temp_polys["polys"][poly_index]["id"]
 			except KeyError:
 				self.tracking_id_set.text_value = "No ID"
 		else:
 			try:
-				self.current_confidence = self.temp_pred_boxes["boxes"][box_index]["confidence"]
-				self.tracking_id_set.text_value = self.temp_pred_boxes["boxes"][box_index]["id"]
+				# self.current_confidence = self.temp_pred_boxes["boxes"][box_index]["confidence"]
+				self.current_confidence = self.temp_pred_polys["polys"][poly_index]["confidence"]
+				# self.tracking_id_set.text_value = self.temp_pred_boxes["boxes"][box_index]["id"]
+				self.tracking_id_set.text_value = self.temp_pred_polys["polys"][poly_index]["id"]
 			except KeyError:
 				self.tracking_id_set.text_value = "No ID"
 		# box = self.box_indices[box_index]
@@ -840,7 +1048,7 @@ class Annotation:
 		boxes = [self.annotation_class, self.corner_x1, self.corner_y1, self.corner_x2, self.corner_y2,
 		    self.delete_annotation_button, self.confidence_set]
 		enabled = False
-		if self.box_selected is not None:
+		if self.poly_selected is not None:
 			enabled = True
 
 		for i in boxes:
@@ -854,14 +1062,14 @@ class Annotation:
 			return -1
 		
 		if self.show_pred:
-			if self.box_selected is not None:
+			if self.poly_selected is not None:
 				self.confidence_set.enabled = True
 				self.box_trajectory_checkbox.enabled = False
 			else:
 				self.confidence_set.enabled = False
 				self.box_trajectory_checkbox.enabled = False
 		else:
-			if self.box_selected is not None:
+			if self.poly_selected is not None:
 				self.confidence_set.enabled = False
 				self.box_trajectory_checkbox.enabled = True
 			else:
@@ -877,12 +1085,14 @@ class Annotation:
 		annot_vert = gui.Vert()
 		annot_vert.add_child(annot_type)
 		annot_vert.add_child(annot_class)
-		current_box = self.previous_index
+		current_poly = self.previous_index
 		# box_object = self.boxes_in_scene[current_box]
-		box_object = self.boxes_to_render[current_box]
+		# box_object = self.boxes_to_render[current_box]
+		poly_object = self.polys_to_render[current_poly]
 
 		# scaled_color = tuple(255*x for x in box_object[COLOR])
-		scaled_color = box_object[COLOR]
+		# scaled_color = box_object[COLOR]
+		scaled_color = poly_object.color
 		if self.show_gt:
 			self.annotation_type.text = "Ground Truth"
 			selected = list(self.color_map.keys())[list(self.color_map.values()).index(scaled_color)]
@@ -897,7 +1107,7 @@ class Annotation:
 		elif self.show_pred:
 			self.annotation_type.text = "Prediction"
 			selected = list(self.pred_color_map.keys())[list(self.pred_color_map.values()).index(scaled_color)]
-			if self.annotation_class.get_item(0) != selected:
+			if self.annotation_class.selected_value != selected:
 				class_list = []
 				class_list.append(selected)
 				for annotation in self.pred_color_map:
@@ -905,46 +1115,47 @@ class Annotation:
 						class_list.append(annotation)
 				self.annotation_class.set_items(class_list)
 
-		corners = box_object[CORNERS]
-		# box_rotate = list(box_object.R)
-		# r = Rotation.from_matrix(box_rotate)
-		# euler_rotations = r.as_euler("xyz", False)
-		# box_scale = box_object.extent
+		# # corners = box_object[CORNERS]
+		#  = poly_object.vertices
+		# # box_rotate = list(box_object.R)
+		# # r = Rotation.from_matrix(box_rotate)
+		# # euler_rotations = r.as_euler("xyz", False)
+		# # box_scale = box_object.extent
 
-		self.corner_x1.double_value = corners[0]
-		self.corner_y1.double_value = corners[1]
-		self.corner_x2.double_value = corners[2]
-		self.corner_y2.double_value = corners[3]
+		# self.corner_x1.double_value = corners[0]
+		# self.corner_y1.double_value = corners[1]
+		# self.corner_x2.double_value = corners[2]
+		# self.corner_y2.double_value = corners[3]
 
 
-		#updates array of all properties to allow referencing previous values
-		self.box_props_selected = corners
+		# #updates array of all properties to allow referencing previous values
+		# self.box_props_selected = corners
 
-		if self.show_gt:
-			current_temp_box = self.temp_boxes["boxes"][self.previous_index]
-			updated_box_metadata = self.create_box_metadata(
-				# TODO: change the structure of temp_boxes for 2D
-				corners,
-				current_temp_box["annotation"],
-				current_temp_box["confidence"],
-				current_temp_box["id"],
-				current_temp_box["camera"],
-				current_temp_box["internal_pts"],
-				current_temp_box["data"]
-			)
-			self.temp_boxes['boxes'][self.previous_index] = updated_box_metadata
-		else:
-			current_temp_box = self.temp_pred_boxes["boxes"][self.previous_index]
-			updated_box_metadata = self.create_box_metadata(
-				corners,
-				current_temp_box["annotation"],
-				current_temp_box["confidence"],
-				"",
-				current_temp_box["camera"],
-				0,
-				current_temp_box["data"]
-			)
-			self.temp_pred_boxes['boxes'][self.previous_index] = updated_box_metadata		
+		# if self.show_gt:
+		# 	current_temp_box = self.temp_boxes["boxes"][self.previous_index]
+		# 	updated_box_metadata = self.create_box_metadata(
+		# 		# TODO: change the structure of temp_boxes for 2D
+		# 		corners,
+		# 		current_temp_box["annotation"],
+		# 		current_temp_box["confidence"],
+		# 		current_temp_box["id"],
+		# 		current_temp_box["camera"],
+		# 		current_temp_box["internal_pts"],
+		# 		current_temp_box["data"]
+		# 	)
+		# 	self.temp_boxes['boxes'][self.previous_index] = updated_box_metadata
+		# else:
+		# 	current_temp_box = self.temp_pred_boxes["boxes"][self.previous_index]
+		# 	updated_box_metadata = self.create_box_metadata(
+		# 		corners,
+		# 		current_temp_box["annotation"],
+		# 		current_temp_box["confidence"],
+		# 		"",
+		# 		current_temp_box["camera"],
+		# 		0,
+		# 		current_temp_box["data"]
+		# 	)
+		# 	self.temp_pred_boxes['boxes'][self.previous_index] = updated_box_metadata		
 		self.cw.post_redraw()
 
 	#redirects on_value_changed events to appropriate box transformation function
@@ -961,31 +1172,39 @@ class Annotation:
 	# on label change, changes temp_boxes value and color of current box
 	def label_change_handler(self, label, pos):
 		if self.show_gt:
-			self.temp_boxes["boxes"][self.previous_index]["annotation"] = label
+			# self.temp_boxes["boxes"][self.previous_index]["annotation"] = label
+			self.temp_polys["polys"][self.previous_index]["annotation"] = label
 		else:
-			self.temp_pred_boxes["boxes"][self.previous_index]["annotation"] = label
-		current_box = self.boxes_to_render[self.previous_index]
+			# self.temp_pred_boxes["boxes"][self.previous_index]["annotation"] = label
+			self.temp_pred_polys["polys"][self.previous_index]["annotation"] = label
+		# current_box = self.boxes_to_render[self.previous_index]
+		current_poly = self.polys_to_render[self.previous_index]
 		# box_name = self.box_indices[self.previous_index]
 		if self.show_gt:
-			box_data = self.temp_boxes["boxes"][self.previous_index]
+			# box_data = self.temp_boxes["boxes"][self.previous_index]
+			poly_data = self.temp_polys["polys"][self.previous_index]
 		else:
-			box_data = self.temp_pred_boxes["boxes"][self.previous_index]
+			# box_data = self.temp_pred_boxes["boxes"][self.previous_index]
+			poly_data = self.temp_pred_polys["polys"][self.previous_index]
 		# self.scene_widget.scene.remove_geometry(box_name)
 
 		# changes color of box based on label selection
 		new_color = None
-		if label in self.color_map and box_data["confidence"] == 101:
+		# if label in self.color_map and box_data["confidence"] == 101:
+		if label in self.color_map and poly_data["confidence"] == 101:
 			new_color = self.color_map[label]
 		elif label in self.pred_color_map:
 			new_color = self.pred_color_map[label]
 
 		# new_color = tuple(x/255 for x in new_color)
-		current_box[COLOR] = new_color
+		# current_box[COLOR] = new_color
+		current_poly.color = new_color
 		# self.scene_widget.scene.add_geometry(box_name, current_box, self.line_mat_highlight)
 
 		# self.point_cloud.post_redraw()
 		# self.update_poses()
-		self.update_boxes_to_render()
+		# self.update_boxes_to_render()
+		self.update_polys_to_render()
 		self.update_image()
 
 	#used by property fields to move box along specified axis to new position -> value
@@ -1061,7 +1280,7 @@ class Annotation:
 	#adapted from lct method, credit to Nicholas Revilla
 	def update_image(self):
 		"""Fetches new image from LVT Directory, and draws it onto a plt figure
-		   Uses nuScenes API to project 3D bounding boxes onto that plt figure
+		   Uses nuScenes API to project 3D mask boxes onto that plt figure
 		   Finally, extracts raw image data from plt figure and updates our image widget
 			Args:
 				self: window object
@@ -1071,29 +1290,46 @@ class Annotation:
 		# Extract new image from file
 		self.image = np.asarray(Image.open(self.image_path))
 
-		for idx, b in enumerate(self.boxes_to_render):
+		# for idx, b in enumerate(self.boxes_to_render):
+		for idx, p in enumerate(self.polys_to_render):
 			selected = False
 			if idx == self.previous_index:
 				thickness = 2
 				selected = True
+				if self.temp_line is not None:
+					self.image = cv2.line(self.image, (int(self.temp_line[0][0]), int(self.temp_line[0][1])), (int(self.temp_line[1][0]), int(self.temp_line[1][1])), (255, 255, 255), 1)
 			else:
 				thickness = 1
 				
-			x1, y1, x2, y2 = b[CORNERS]
+			# x1, y1, x2, y2 = b[CORNERS]
+			vertices = p.vertices
 			# print(x1, y1, x2, y2)
-			color = b[COLOR]
+			# color = b[COLOR]
+			color = p.color
 			# print(color)
-			if self.rgb_sensor_name == b[CAMERA_NAME]:
-				self.image = cv2.rectangle(self.image, (int(x1), int(y1)), (int(x2), int(y2)), color, thickness)
-				# print("created bbox")
+			# if self.rgb_sensor_name == b[CAMERA_NAME]:
+			if self.rgb_sensor_name == p.camera_name:
+				# self.image = cv2.rectangle(self.image, (int(x1), int(y1)), (int(x2), int(y2)), color, thickness)
+				# # print("created bbox")
+				# Render the polygon with vertices as small rectangles
+				for i in range(len(vertices)):
+					# print(vertices[i], vertices[(i+1) % len(vertices)])
+					self.image = cv2.line(self.image, (int(vertices[i][0]), int(vertices[i][1])), (int(vertices[(i+1) % len(vertices)][0]), int(vertices[(i+1) % len(vertices)][1])), color, thickness)
+
+					self.image = cv2.rectangle(self.image, (int(vertices[i][0]-2), int(vertices[i][1]-2)), (int(vertices[i][0]+2), int(vertices[i][1]+2)), color, thickness)
+				# print("created polygon")
+
+
 				# Add annotation label
-				self.image = cv2.putText(self.image, b[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
+				# self.image = cv2.putText(self.image, b[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
+				# self.image = cv2.putText(self.image, p[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
+				self.image = cv2.putText(self.image, p.annotation, (int(p.vertices[0][0]), int(p.vertices[0][1]-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
 			
-				if selected:
-					self.image = cv2.rectangle(self.image, (int(x1-2), int(y1-2)), (int(x1+2), int(y1+2)), (255, 255, 255), 3)
-					self.image = cv2.rectangle(self.image, (int(x2-2), int(y2-2)), (int(x2+2), int(y2+2)), (255, 255, 255), 3)
-					self.image = cv2.rectangle(self.image, (int(x1-2), int(y2-2)), (int(x1+2), int(y2+2)), (255, 255, 255), 3)
-					self.image = cv2.rectangle(self.image, (int(x2-2), int(y1-2)), (int(x2+2), int(y1+2)), (255, 255, 255), 3)
+				# if selected:
+				# 	self.image = cv2.rectangle(self.image, (int(x1-2), int(y1-2)), (int(x1+2), int(y1+2)), (255, 255, 255), 3)
+				# 	self.image = cv2.rectangle(self.image, (int(x2-2), int(y2-2)), (int(x2+2), int(y2+2)), (255, 255, 255), 3)
+				# 	self.image = cv2.rectangle(self.image, (int(x1-2), int(y2-2)), (int(x1+2), int(y2+2)), (255, 255, 255), 3)
+				# 	self.image = cv2.rectangle(self.image, (int(x2-2), int(y1-2)), (int(x2+2), int(y1+2)), (255, 255, 255), 3)
 
 		new_image = o3d.geometry.Image(self.image)
 		self.image_widget.update_image(new_image)
@@ -1130,7 +1366,7 @@ class Annotation:
 				None
 				"""
 		self.rgb_sensor_name = new_val
-		self.deselect_box()
+		self.deselect_poly()
 		self.update_image_path()
 
 	def update_poses(self):
@@ -1164,7 +1400,7 @@ class Annotation:
 		   Validates that the new frame number is valid (within range of frame nums) 
 			Args:
 				self: window object
-				new_val: new fram number
+				new_val: new frame number
 			Returns:
 				None
 				"""
@@ -1172,7 +1408,7 @@ class Annotation:
 			# Set new frame value
 			self.frame_num = int(new_val)
 			self.frame_select.set_value(self.frame_num)
-			self.deselect_box()
+			self.deselect_poly()
 			# Update Bounding Box List
 			self.update()
 	
@@ -1203,8 +1439,8 @@ class Annotation:
 		
 
 
-	def toggle_bounding(self, new_val, new_idx):
-		"""This updates the bounding box on the window to reflect either bounding or predicted bounding
+	def toggle_mask(self, new_val, new_idx):
+		"""This updates the mask box on the window to reflect either mask or predicted mask
 			Then updates the window to reflect changes 
 			Args:
 				self: window object
@@ -1238,17 +1474,21 @@ class Annotation:
 
 	# deletes the currently selected annotation as well as all its associated data, else nothing happens
 	def delete_annotation(self):
-		if self.box_selected:
-			current_box = self.previous_index
+		if self.poly_selected:
+			# current_box = self.previous_index
+			current_poly = self.previous_index
 
 			if self.show_gt:
-				self.temp_boxes["boxes"].pop(current_box)
+				# self.temp_boxes["boxes"].pop(current_box)
+				self.temp_polys["polys"].pop(current_poly)
 			else:
-				self.temp_pred_boxes["boxes"].pop(current_box)
+				# self.temp_pred_boxes["boxes"].pop(current_box)
+				self.temp_pred_polys["polys"].pop(current_poly)
 			
 			self.previous_index = -1
-			self.box_selected = None
-			self.update_boxes_to_render()
+			self.poly_selected = None
+			# self.update_boxes_to_render()
+			self.update_polys_to_render()
 			self.update_props()
 			self.update_poses()
 
@@ -1308,7 +1548,8 @@ class Annotation:
 		self.annotation_class.selected_index = num_classes - 1
 
 		# if a box is currently selected, it becomes the new type
-		if self.box_selected is not None:
+		# if self.poly_selected is not None:
+		if self.poly_selected is not None:
 
 			self.label_change_handler(self.text_box.text_value, num_classes - 1)
 		self.cw.close_dialog()
@@ -1318,18 +1559,27 @@ class Annotation:
 		self.save_check = 1
 		self.cw.close_dialog()
 		# check current annotation type and save to appropriate folder
-		for box in self.temp_boxes["boxes"]:
-			box["data"]["propagate"] = False
-		for box in self.temp_pred_boxes["boxes"]:
-			box["data"]["propagate"] = False
+		# for box in self.temp_boxes["boxes"]:
+		for poly in self.temp_polys["polys"]:
+			# box["data"]["propagate"] = False
+			poly['data']["propagate"] = False
+		# for box in self.temp_pred_boxes["boxes"]:
+		for poly in self.temp_pred_polys["polys"]:
+			# box["data"]["propagate"] = False
+			poly['data']["propagate"] = False
 		if self.show_gt and not self.show_pred:
-			path = os.path.join(self.lct_path ,"bounding", str(self.frame_num), "2d_boxes.json")
-			boxes_to_save = {"boxes": [box for box in self.temp_boxes["boxes"]]}
+			# path = os.path.join(self.lct_path ,"mask", str(self.frame_num), "2d_boxes.json")
+			path = os.path.join(self.lct_path ,"mask", str(self.frame_num), "polys.json")
+			# boxes_to_save = {"boxes": [box for box in self.temp_boxes["boxes"]]}
+			polys_to_save = {"polys": [poly for poly in self.temp_polys["polys"]]}
 		elif self.show_pred and not self.show_gt:
-			path = os.path.join(self.lct_path ,"pred_bounding", str(self.frame_num), "2d_boxes.json")
-			boxes_to_save = {"boxes": [box for box in self.temp_pred_boxes["boxes"]]}
+			# path = os.path.join(self.lct_path ,"pred_mask", str(self.frame_num), "2d_boxes.json")
+			path = os.path.join(self.lct_path ,"pred_mask", str(self.frame_num), "polys.json")
+			# boxes_to_save = {"boxes": [box for box in self.temp_pred_boxes["boxes"]]}
+			polys_to_save = {"polys": [poly for poly in self.temp_pred_polys["polys"]]}
 		with open(path, "w") as outfile:
-			outfile.write(json.dumps(boxes_to_save))
+			# outfile.write(json.dumps(boxes_to_save))
+			outfile.write(json.dumps(polys_to_save))
 
 	def save_as(self):
 		# opens a file browser to let user select place to save
@@ -1341,128 +1591,32 @@ class Annotation:
 
 	def save_and_propagate(self):
 		# propagates changes to the next frame
-		old_gt_boxes_path = os.path.join(self.lct_path ,"bounding", str(self.frame_num), "2d_boxes.json")
-		old_pred_boxes_path = os.path.join(self.lct_path ,"pred_bounding", str(self.frame_num), "2d_boxes.json")
+		old_gt_polys_path = os.path.join(self.lct_path ,"mask", str(self.frame_num), "polys.json")
+		old_pred_polys_path = os.path.join(self.lct_path ,"pred_mask", str(self.frame_num), "polys.json")
 
-		old_pred_boxes = json.load(open(old_pred_boxes_path))
-		old_gt_boxes = json.load(open(old_gt_boxes_path))
+		old_pred_polys = json.load(open(old_pred_polys_path))
+		old_gt_polys = json.load(open(old_gt_polys_path))
 
-		new_gt_boxes = [box for box in self.temp_boxes["boxes"] if (box not in old_gt_boxes["boxes"] and box["data"]["propagate"]==True)]
-		new_pred_boxes = [box for box in self.temp_pred_boxes["boxes"] if (box not in old_pred_boxes["boxes"] and box["data"]["propagate"]==True)]
+		new_gt_polys = [box for box in self.temp_polys["polys"] if (box not in old_gt_polys["polys"] and box["data"]["propagate"]==True)]
+		new_pred_polys = [box for box in self.temp_pred_polys["polys"] if (box not in old_pred_polys["polys"] and box["data"]["propagate"]==True)]
 
-		prev_gt_boxes = [box for box in old_gt_boxes["boxes"] if box not in self.temp_boxes["boxes"]]
-		prev_pred_boxes = [box for box in old_pred_boxes["boxes"] if box not in self.temp_pred_boxes["boxes"]]
+		prev_gt_polys = [box for box in old_gt_polys["polys"] if box not in self.temp_polys["polys"]]
+		prev_pred_polys = [box for box in old_pred_polys["polys"] if box not in self.temp_pred_polys["polys"]]
 
 
 		self.save_changes_to_json()
 
-		for box in new_gt_boxes:
+		for box in new_gt_polys:
 			box["data"]["propagate"] = True
-		for box in new_pred_boxes:
+		for box in new_pred_polys:
 			box["data"]["propagate"] = True
 
-		global_new_gt_boxes = []
-
-		# Transform boxes to global frame
-		for box in new_gt_boxes:
-			size = [0,0,0]
-			# Open3D wants sizes in L,W,H
-			size[0] = box["size"][1]
-			size[1] = box["size"][0]
-			size[2] = box["size"][2]
-
-			bounding_box = o3d.geometry.OrientedBoundingBox(box["origin"], Quaternion(box["rotation"]).rotation_matrix, size)
-			bounding_box.rotate(Quaternion(self.frame_extrinsic['rotation']).rotation_matrix, [0,0,0])
-			bounding_box.translate(np.array(self.frame_extrinsic['translation']))
-			
-			global_box = self.create_box_metadata(bounding_box.get_center(), size, Quaternion(matrix=bounding_box.R).elements, box["annotation"],
-												  box["confidence"], box["id"], box["internal_pts"], box["data"])
-
-			global_new_gt_boxes.append(global_box)
+		global_new_gt_polys = []
 		
 		global_new_pred_boxes = []
 
-		# Transform boxes to global frame
-		for box in new_pred_boxes:
-			size = [0,0,0]
-			# Open3D wants sizes in L,W,H
-			size[0] = box["size"][1]
-			size[1] = box["size"][0]
-			size[2] = box["size"][2]
-
-			bounding_box = o3d.geometry.OrientedBoundingBox(box["origin"], Quaternion(box["rotation"]).rotation_matrix, size)
-			bounding_box.rotate(Quaternion(self.frame_extrinsic['rotation']).rotation_matrix, [0,0,0])
-			bounding_box.translate(np.array(self.frame_extrinsic['translation']))
-			
-			global_box = self.create_box_metadata(bounding_box.get_center(), size, Quaternion(matrix=bounding_box.R).elements, box["annotation"],
-												  box["confidence"], "", 0, box["data"])
-
-			global_new_pred_boxes.append(global_box)
-
-		# get ego data for next frame
-		next_frame_num = self.frame_num + 1
-		next_frame_extrinsic = json.load(open(os.path.join(self.lct_path, "ego", str(next_frame_num) + ".json")))
-
-		# Transform boxes to ego coordinate frame of the next frame
-		for box in global_new_gt_boxes:
-			size = [0,0,0]
-			# switch sizes back
-			size[0] = box["size"][1]
-			size[1] = box["size"][0]
-			size[2] = box["size"][2]
-
-			try:
-				velocity = box["data"]["velocity"]
-			except KeyError:
-				velocity = [0,0,0]
-
-			if self.source_format == "nuScenes":
-				delta_time = 0.5 # TODO: add other datasets
-
-			projected_origin = [velocity[i] * delta_time + box["origin"][i] for i in range(3)]
-
-			bounding_box = o3d.geometry.OrientedBoundingBox(projected_origin, Quaternion(box["rotation"]).rotation_matrix, size)
-
-			box_to_rotate = o3d.geometry.OrientedBoundingBox(bounding_box) #copy box object to do transforms on
-			reverse_extrinsic = Quaternion(next_frame_extrinsic['rotation']).inverse
-			box_to_rotate.translate(-np.array(next_frame_extrinsic['translation']))
-			box_to_rotate = box_to_rotate.rotate(reverse_extrinsic.rotation_matrix, [0,0,0])
-			result = Quaternion(matrix=box_to_rotate.R)
-			ego_box = self.create_box_metadata(box_to_rotate.center, size, result.elements, box["annotation"], box["confidence"], box["id"],
-					  						   box["internal_pts"], box["data"])
-			
-			ego_box['data']['prev_origin'] = box["origin"] # stores the current origin in the global frame
-			
-			self.propagated_gt_boxes.append(ego_box)
-		
-		for box in global_new_pred_boxes:
-			size = [0,0,0]
-			# switch sizes back
-			size[0] = box["size"][1]
-			size[1] = box["size"][0]
-			size[2] = box["size"][2]
-
-			try:
-				velocity = box["data"]["velocity"]
-			except KeyError:
-				velocity = [0,0,0]
-
-			if self.source_format == "nuScenes":
-				delta_time = 0.5 # TODO: add other datasets
-
-			projected_origin = [velocity[i] * delta_time + box["origin"][i] for i in range(3)]
-
-			bounding_box = o3d.geometry.OrientedBoundingBox(projected_origin, Quaternion(box["rotation"]).rotation_matrix, size)
-
-			box_to_rotate = o3d.geometry.OrientedBoundingBox(bounding_box)
-			reverse_extrinsic = Quaternion(next_frame_extrinsic['rotation']).inverse
-			box_to_rotate.translate(-np.array(next_frame_extrinsic['translation']))
-			box_to_rotate = box_to_rotate.rotate(reverse_extrinsic.rotation_matrix, [0,0,0])
-			result = Quaternion(matrix=box_to_rotate.R)
-			ego_box = self.create_box_metadata(box_to_rotate.center, size, result.elements, box["annotation"], box["confidence"], "", 0, box["data"])
-			ego_box['data']['prev_origin'] = box['origin'] # stores the previous origin in the global frame
-			
-			self.propagated_pred_boxes.append(ego_box)
+		self.propagated_pred_polys = []
+		self.propagated_gt_polys = []
 
 
 		new_val = self.frame_num + 1
@@ -1544,7 +1698,7 @@ class Annotation:
 		for i in range(-3, 4):
 			# Load the annotations of this object from previous and next frames
 			try:
-				boxes_i = json.load(open(os.path.join(self.lct_path , "bounding", str(self.frame_num + i), "2d_boxes.json")))
+				boxes_i = json.load(open(os.path.join(self.lct_path , "mask", str(self.frame_num + i), "2d_boxes.json")))
 				extrinsics_i = json.load(open(os.path.join(self.lct_path, "ego", str(self.frame_num + i) + ".json")))
 			except FileNotFoundError:
 				continue
@@ -1727,8 +1881,8 @@ class Annotation:
 	# 	if OS_STRING != "Windows":
 	# 		self.point_cloud.post_redraw()
 	
-	def update_bounding(self):
-		"""Updates bounding box information when switching frames
+	def update_mask(self):
+		"""Updates mask box information when switching frames
 			Args:
 				self: window object
 			Returns:
@@ -1736,73 +1890,100 @@ class Annotation:
 				"""
 
 		#Array that will hold list of boxes that will eventually be rendered
-		self.boxes_to_render = []
+		# self.boxes_to_render = []
+		self.polys_to_render = []
 
 		# boxes loaded for the current frame
-		self.temp_boxes = json.load(open(os.path.join(self.lct_path , "bounding", str(self.frame_num), "2d_boxes.json")))
-		self.temp_boxes["boxes"].extend(self.propagated_gt_boxes)
+		# self.temp_boxes = json.load(open(os.path.join(self.lct_path , "mask", str(self.frame_num), "2d_boxes.json")))
+		self.temp_polys = json.load(open(os.path.join(self.lct_path , "mask", str(self.frame_num), "polys.json")))
+		# self.temp_boxes["boxes"].extend(self.propagated_gt_boxes)
+		self.temp_polys["polys"].extend(self.propagated_gt_polys)
 		try:
-			self.temp_pred_boxes = json.load(open(os.path.join(self.lct_path , "pred_bounding", str(self.frame_num), "2d_boxes.json")))
+			# self.temp_pred_boxes = json.load(open(os.path.join(self.lct_path , "pred_mask", str(self.frame_num), "2d_boxes.json")))
+			self.temp_pred_polys = json.load(open(os.path.join(self.lct_path , "pred_mask", str(self.frame_num), "polys.json")))
 		except:
-			self.temp_pred_boxes = {"boxes": []}
-		self.temp_pred_boxes["boxes"].extend(self.propagated_pred_boxes)
+			# self.temp_pred_boxes = {"boxes": []}
+			self.temp_pred_polys = {"polys": []}
+		# self.temp_pred_boxes["boxes"].extend(self.propagated_pred_boxes)
+		self.temp_pred_polys["polys"].extend(self.propagated_pred_polys)
 
-		self.propagated_gt_boxes = [] #reset propagated boxes
-		self.propagated_pred_boxes = []
+		# self.propagated_gt_boxes = [] #reset propagated boxes
+		# self.propagated_pred_boxes = []
+		self.propagated_gt_polys = [] #reset propagated polys
+		self.propagated_pred_polys = []
 		
 		# #If highlight_faults is False, then we just filter boxes
 		
 		# #If checked, add GT Boxes we should render
 		if self.show_gt is True:
-			for box in self.temp_boxes['boxes']:
-				if box['confidence'] >= self.min_confidence:
-					bounding_box = [box["bbox_corners"], box['annotation'], box['confidence'], self.color_map[box['annotation']], box['camera']]
+			# for box in self.temp_boxes['boxes']:
+			for poly in self.temp_polys['polys']:
+				# if box['confidence'] >= self.min_confidence:
+				if poly['confidence'] >= self.min_confidence:
+					# bounding_box = [box["bbox_corners"], box['annotation'], box['confidence'], self.color_map[box['annotation']], box['camera']]
+					mask_poly = Polygon(poly["vertices"], poly['annotation'], self.color_map[poly['annotation']], poly['confidence'], poly['id'], poly['camera'], poly['internal_pts'], poly['data'])
 					# if bounding_box[CAMERA_NAME] == self.rgb_sensor_name:
-					self.boxes_to_render.append(bounding_box)
-		print(len(self.temp_boxes['boxes']))
-		print(len(self.boxes_to_render))
+					# self.boxes_to_render.append(bounding_box)
+					self.polys_to_render.append(mask_poly)
+		# print(len(self.temp_boxes['boxes']))
+		print(len(self.temp_polys['polys']))
+		# print(len(self.boxes_to_render))
+		print(len(self.polys_to_render))
 
 		#Add Pred Boxes we should render
 		if self.show_pred is True:
 			if self.pred_frames > 0:
-				for box in self.temp_pred_boxes['boxes']:
-					if box['confidence'] >= self.min_confidence:
-						bounding_box = [box["bbox_corners"], box['annotation'], box['confidence'], self.color_map[box['annotation']], box['camera']]
+				# for box in self.temp_pred_boxes['boxes']:
+				for poly in self.temp_pred_polys['polys']:
+					# if box['confidence'] >= self.min_confidence:
+					if poly['confidence'] >= self.min_confidence:
+						# bounding_box = [box["bbox_corners"], box['annotation'], box['confidence'], self.color_map[box['annotation']], box['camera']]
+						mask_poly = Polygon(poly["vertices"], poly['annotation'], self.color_map[poly['annotation']], poly['confidence'], poly['id'], poly['camera'], poly['internal_pts'], poly['data'])
 						# if bounding_box[CAMERA_NAME] == self.rgb_sensor_name:
-						self.boxes_to_render.append(bounding_box)
+						# self.boxes_to_render.append(bounding_box)
+						self.polys_to_render.append(mask_poly)
 
 
 		#Post Redraw calls seem to crash the app on windows. Temporary workaround
 		if OS_STRING != "Windows":
 			self.cw.post_redraw()
 
-	def update_boxes_to_render(self):
-		"""Updates bounding box information when adding/removing boxes (for RGB image)
+	def update_polys_to_render(self):
+		"""Updates mask box information when adding/removing boxes (for RGB image)
 			Args:
 				self: window object
 			Returns:
 				None
 				"""
 		#Array that will hold list of boxes that will eventually be rendered
-		self.boxes_to_render = []
+		# self.boxes_to_render = []
+		self.polys_to_render = []
 
 		# #If checked, add GT Boxes we should render
 		if self.show_gt is True:
-			for box in self.temp_boxes['boxes']:
+			# for box in self.temp_boxes['boxes']:
+			for poly in self.temp_polys['polys']:
 				# print(self.boxes)
-				if box['confidence'] >= self.min_confidence:
-					bounding_box = [box["bbox_corners"], box['annotation'], box['confidence'], self.color_map[box['annotation']], box['camera']]
+				# if box['confidence'] >= self.min_confidence:
+				if poly['confidence'] >= self.min_confidence:
+					# bounding_box = [box["bbox_corners"], box['annotation'], box['confidence'], self.color_map[box['annotation']], box['camera']]
+					mask_poly = Polygon(poly["vertices"], poly['annotation'], self.color_map[poly['annotation']], poly['confidence'], poly['id'], poly['camera'], poly['internal_pts'], poly['data'])
 					# if bounding_box[CAMERA_NAME] == self.rgb_sensor_name:
-					self.boxes_to_render.append(bounding_box)
+					# self.boxes_to_render.append(bounding_box)
+					self.polys_to_render.append(mask_poly)
 
 		#Add Pred Boxes we should render
 		if self.show_pred is True:
 			if self.pred_frames > 0:
-				for box in self.temp_pred_boxes['boxes']:
-					if box['confidence'] >= self.min_confidence:
-						bounding_box = [box["bbox_corners"], box['annotation'], box['confidence'], self.color_map[box['annotation']], box['camera']]
+				# for box in self.temp_pred_boxes['boxes']:
+				for poly in self.temp_pred_polys['polys']:
+					# if box['confidence'] >= self.min_confidence:
+					if poly['confidence'] >= self.min_confidence:
+						# bounding_box = [box["bbox_corners"], box['annotation'], box['confidence'], self.color_map[box['annotation']], box['camera']]
+						mask_poly = Polygon(poly["vertices"], poly['annotation'], self.color_map[poly['annotation']], poly['confidence'], poly['id'], poly['camera'], poly['internal_pts'], poly['data'])
 						# if bounding_box[CAMERA_NAME] == self.rgb_sensor_name:
-						self.boxes_to_render.append(bounding_box)
+						# self.boxes_to_render.append(bounding_box)
+						self.polys_to_render.append(mask_poly)
 
 		
 
@@ -1818,7 +1999,7 @@ class Annotation:
 		# print("temp boxes:", self.temp_boxes)
 		# print("temp pred boxes:", self.temp_pred_boxes)
 		# self.update_pcd_path()
-		self.update_bounding()
+		self.update_mask()
 		self.update_image_path()
 		# self.update_pointcloud()
 
