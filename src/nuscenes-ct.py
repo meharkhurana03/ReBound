@@ -587,15 +587,20 @@ if __name__ == "__main__":
     # specified path. 
     if ver_name == "":
         sys.exit("No version name given")
-    if not validate_input_path(input_path, ver_name):
-        sys.exit("Invalid input path or version name specified. Please check paths or version name entered and try again")
+
+    try:
+        # If input path is invalid as nuScenes database, this constructor will throw an AssertationError
+        nusc=NuScenes(version=ver_name, dataroot=input_path, verbose=True)
+    except AssertionError as error:
+        print("Invalid argument passed in as nuScenes file.")
+    # if not validate_input_path(input_path, ver_name):
+    #     sys.exit("Invalid input path or version name specified. Please check paths or version name entered and try again")
     pred_data = {}
     if pred_path != "":
         pred_data = json.load(open(pred_path))
     input_path += ("" if input_path[-1] == "/" else "/")
     output_path += ("" if output_path[-1] == "/" else "/")
 
-    nusc = NuScenes(ver_name, input_path, True)
 
     path = os.getcwd()
 
@@ -619,4 +624,26 @@ if __name__ == "__main__":
     
 
     for scene_name in scene_names:
-        convert_dataset(output_path + scene_name, scene_name, pred_data)
+        try:
+            convert_dataset(output_path + scene_name, scene_name, pred_data)
+        except FileNotFoundError:
+            print("Scene not found.")
+            break
+
+
+def get_all_sample_tokens_for_scene(nusc, scene_name):
+    """Returns a list of all sample tokens for a scene
+    Args:
+        nusc: NuScenes API object used for obtaining data
+        scene_name: Name of the scene
+    Returns:
+        sample_tokens: List of sample tokens for the scene
+        """
+    scene_token = nusc.field2token('scene', 'name', scene_name)[0]
+    scene = nusc.get('scene', scene_token)
+    sample_tokens = []
+    sample_tokens.append(scene['first_sample_token'])
+    while scene['next'] != '':
+        sample_tokens.append(scene['next'])
+        scene = nusc.get('scene', scene['next'])
+    return sample_tokens

@@ -160,9 +160,11 @@ class Annotation:
 		self.current_confidence = 0
 
 		# Add combobox to switch between predicted and ground truth
-		self.bounding_toggle = gui.Combobox()
-		self.bounding_toggle.add_item("Predicted")
-		self.bounding_toggle.add_item("Ground Truth")
+		# self.bounding_toggle = gui.Combobox()
+		# self.bounding_toggle.add_item("Predicted")
+		# self.bounding_toggle.add_item("Ground Truth")
+		self.bounding_toggle = gui.ListView()
+		self.bounding_toggle.set_items(["Ground Truth", "Predicted"])
 		self.bounding_toggle.set_on_selection_changed(self.toggle_bounding)
 
 		bounding_toggle_layout = gui.Horiz()
@@ -231,10 +233,12 @@ class Annotation:
 		# dropdown selector for selecting current drag mode
 		self.toggle_horiz = gui.Horiz(0.50 * em, margin)
 		toggle_label = gui.Label("Current Drag Mode:")
-		self.toggle_axis_selector = gui.Combobox()
+		# self.toggle_axis_selector = gui.Combobox()
+		self.toggle_axis_selector = gui.ListView()
+		self.toggle_axis_selector.set_items(["Horizontal", "Vertical"])
 		self.toggle_axis_selector.set_on_selection_changed(self.toggle_axis)
-		self.toggle_axis_selector.add_item("Horizontal")
-		self.toggle_axis_selector.add_item("Vertical")
+		# self.toggle_axis_selector.add_item("Horizontal")
+		# self.toggle_axis_selector.add_item("Vertical")
 		self.toggle_horiz.add_child(toggle_label)
 		self.toggle_horiz.add_child(self.toggle_axis_selector)
 
@@ -245,10 +249,12 @@ class Annotation:
 		toggle_camera_vert = gui.CollapsableVert("Camera")
 		toggle_camera_horiz = gui.Horiz(0.50 * em, margin)
 		toggle_camera_label = gui.Label("Camera:")
-		toggle_camera_selector = gui.Combobox()
+		# toggle_camera_selector = gui.Combobox()
+		toggle_camera_selector = gui.ListView()
+		toggle_camera_selector.set_items(self.camera_sensors)
 		toggle_camera_selector.set_on_selection_changed(self.on_sensor_select)
-		for cam in self.camera_sensors:
-			toggle_camera_selector.add_item(cam)
+		# for cam in self.camera_sensors:
+		# 	toggle_camera_selector.add_item(cam)
 		toggle_camera_horiz.add_child(toggle_camera_label)
 		toggle_camera_horiz.add_child(toggle_camera_selector)
 		toggle_camera_vert.add_child(toggle_camera_horiz)
@@ -260,10 +266,14 @@ class Annotation:
 		rot_collapse = gui.CollapsableVert("Rotation (specify change in degrees)")
 		scale_collapse = gui.CollapsableVert("Scale")
 
-		self.annotation_class = gui.Combobox()
+		# self.annotation_class = gui.Combobox()
+		self.annotation_class = gui.ListView()
+		# self.annotation_class.Constraints()
+		self.annotation_class.set_items(self.all_gt_annotations)
+		self.annotation_class.set_max_visible_items(2)
 		self.annotation_class.set_on_selection_changed(self.label_change_handler)
-		for annotation in self.all_pred_annotations:
-			self.annotation_class.add_item(annotation)
+		# for annotation in self.all_pred_annotations:
+		# 	self.annotation_class.add_item(annotation)
 		self.trans_x = gui.NumberEdit(gui.NumberEdit.Type.DOUBLE)
 		self.trans_x.set_on_value_changed(partial(self.property_change_handler, prop="trans", axis="x"))
 		self.trans_y = gui.NumberEdit(gui.NumberEdit.Type.DOUBLE)
@@ -748,21 +758,23 @@ class Annotation:
 		if self.show_gt:
 			self.annotation_type.text = "Ground Truth"
 			selected = list(self.color_map.keys())[list(self.color_map.values()).index(scaled_color)]
-			if self.annotation_class.get_item(0) != selected:
-				self.annotation_class.clear_items()
-				self.annotation_class.add_item(selected)
+			if self.annotation_class.selected_value != selected:
+				class_list = []
+				class_list.append(selected)
 				for annotation in self.color_map:
 					if annotation != selected:
-						self.annotation_class.add_item(annotation)
+						class_list.append(annotation)
+				self.annotation_class.set_items(class_list)
 		elif self.show_pred:
 			self.annotation_type.text = "Prediction"
 			selected = list(self.pred_color_map.keys())[list(self.pred_color_map.values()).index(scaled_color)]
-			if self.annotation_class.get_item(0) != selected:
-				self.annotation_class.clear_items()
-				self.annotation_class.add_item(selected)
-				for annotation in self.all_pred_annotations + self.new_annotation_types:
+			if self.annotation_class.selected_value != selected:
+				class_list = []
+				class_list.append(selected)
+				for annotation in self.pred_color_map:
 					if annotation != selected:
-						self.annotation_class.add_item(annotation)
+						class_list.append(annotation)
+				self.annotation_class.set_items(class_list)
 
 		box_center = box_object.center
 		box_rotate = list(box_object.R)
