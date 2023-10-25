@@ -464,28 +464,28 @@ class Window:
 			color = p.color
 			# print(color)
 			# if self.rgb_sensor_name == b[CAMERA_NAME]:
-			if self.rgb_sensor_name == p.camera_name:
+			# if self.rgb_sensor_name == p.camera_name:
 				# self.image = cv2.rectangle(self.image, (int(x1), int(y1)), (int(x2), int(y2)), color, thickness)
 				# # print("created bbox")
 				# Render the polygon with vertices as small rectangles
-				for i in range(len(vertices)):
-					# print(vertices[i], vertices[(i+1) % len(vertices)])
-					self.image = cv2.line(self.image, (int(vertices[i][0]), int(vertices[i][1])), (int(vertices[(i+1) % len(vertices)][0]), int(vertices[(i+1) % len(vertices)][1])), color, thickness)
+			for i in range(len(vertices)):
+				# print(vertices[i], vertices[(i+1) % len(vertices)])
+				self.image = cv2.line(self.image, (int(vertices[i][0]), int(vertices[i][1])), (int(vertices[(i+1) % len(vertices)][0]), int(vertices[(i+1) % len(vertices)][1])), color, thickness)
 
-					self.image = cv2.rectangle(self.image, (int(vertices[i][0]-2), int(vertices[i][1]-2)), (int(vertices[i][0]+2), int(vertices[i][1]+2)), color, thickness)
-				# print("created polygon")
+				self.image = cv2.rectangle(self.image, (int(vertices[i][0]-2), int(vertices[i][1]-2)), (int(vertices[i][0]+2), int(vertices[i][1]+2)), color, thickness)
+			# print("created polygon")
 
 
-				# Add annotation label
-				# self.image = cv2.putText(self.image, b[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
-				# self.image = cv2.putText(self.image, p[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
-				self.image = cv2.putText(self.image, p.annotation, (int(p.vertices[0][0]), int(p.vertices[0][1]-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
-			
-				# if selected:
-				# 	self.image = cv2.rectangle(self.image, (int(x1-2), int(y1-2)), (int(x1+2), int(y1+2)), (255, 255, 255), 3)
-				# 	self.image = cv2.rectangle(self.image, (int(x2-2), int(y2-2)), (int(x2+2), int(y2+2)), (255, 255, 255), 3)
-				# 	self.image = cv2.rectangle(self.image, (int(x1-2), int(y2-2)), (int(x1+2), int(y2+2)), (255, 255, 255), 3)
-				# 	self.image = cv2.rectangle(self.image, (int(x2-2), int(y1-2)), (int(x2+2), int(y1+2)), (255, 255, 255), 3)
+			# Add annotation label
+			# self.image = cv2.putText(self.image, b[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
+			# self.image = cv2.putText(self.image, p[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
+			self.image = cv2.putText(self.image, p.annotation, (int(p.vertices[0][0]), int(p.vertices[0][1]-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
+		
+			# if selected:
+			# 	self.image = cv2.rectangle(self.image, (int(x1-2), int(y1-2)), (int(x1+2), int(y1+2)), (255, 255, 255), 3)
+			# 	self.image = cv2.rectangle(self.image, (int(x2-2), int(y2-2)), (int(x2+2), int(y2+2)), (255, 255, 255), 3)
+			# 	self.image = cv2.rectangle(self.image, (int(x1-2), int(y2-2)), (int(x1+2), int(y2+2)), (255, 255, 255), 3)
+			# 	self.image = cv2.rectangle(self.image, (int(x2-2), int(y1-2)), (int(x2+2), int(y1+2)), (255, 255, 255), 3)
 
 		new_image = o3d.geometry.Image(self.image)
 		self.image_widget.update_image(new_image)
@@ -509,7 +509,7 @@ class Window:
 		#
 		# self.boxes = json.load(open(os.path.join(self.lct_path , "mask", str(self.frame_num), "2d_boxes.json")))
 		try:
-			self.polys = json.load(open(os.path.join(self.lct_path , "mask", str(self.frame_num), "polys.json")))
+			self.polys = json.load(open(self.output_path))
 		except:
 			self.polys = {
 				"polys": []
@@ -532,7 +532,7 @@ class Window:
 		
 		if self.pred_frames > 0:
 			# self.pred_boxes = json.load(open(os.path.join(self.lct_path ,"pred_mask", str(self.frame_num), "2d_boxes.json")))
-			self.pred_polys = json.load(open(os.path.join(self.lct_path ,"pred_mask", str(self.frame_num), "polys.json")))
+			self.pred_polys = json.load(open(self.pred_path))
 			#Update the counters for predicted boxes
 			for horiz_widget in self.pred_check_horiz:
 				children = horiz_widget.get_children()
@@ -567,7 +567,7 @@ class Window:
 						# bounding_box = [box["bbox_corners"], box['annotation'], box['confidence'], self.color_map[box['annotation']], box['camera']]
 						mask_poly = Polygon(poly["vertices"], poly['annotation'], self.color_map[poly['annotation']], poly['confidence'], poly['id'], poly['camera'], poly['internal_pts'], poly['data'])
 						# if len(self.filter_arr) == 0 or bounding_box[ANNOTATION] in self.filter_arr:
-						if len(self.filter_arr) == 0 or mask_poly[ANNOTATION] in self.filter_arr:
+						if len(self.filter_arr) == 0 or mask_poly.annotation in self.filter_arr:
 						# and bounding_box[CAMERA_NAME] == self.rgb_sensor_name:
 							# print("added bbox for rendering.")
 							# self.boxes_to_render.append(bounding_box)

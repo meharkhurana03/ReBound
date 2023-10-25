@@ -1609,6 +1609,8 @@ class Annotation:
 			polys_to_save = {"polys": [poly for poly in self.temp_polys["polys"]], "metadata": {
 				"start_time": self.annotation_start_time,
 				"end_time": time.time(),
+				"image_width": self.image_w,
+				"image_height": self.image_h,
 			}}
 		elif self.show_pred and not self.show_gt:
 			# path = os.path.join(self.lct_path ,"pred_mask", str(self.frame_num), "2d_boxes.json")
