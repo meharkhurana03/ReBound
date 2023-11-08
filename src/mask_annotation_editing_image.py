@@ -130,6 +130,7 @@ class Annotation:
 		self.adding_vertex = False
 		self.temp_line = None
 		self.double_click_timer = 0.0
+		self.frame_skipper = 0
 		
 		# modify temp boxes in this file, then when it's time to save use them to overwrite existing json
 		# self.temp_boxes = boxes.copy()
@@ -520,15 +521,19 @@ class Annotation:
 		# self.update_image()
 		# self.box_count += 1
 
-	# # Takes the frame x and y coordinates and flattens the 3D scene into a 2D depth image
-	# # The X and Y coordinates select the depth value from the depth image and converts it into a depth value
-	# # After getting the coordinates, it automatically calls the closest distance function
 	def mouse_event_handler(self, event):
 		widget = self.image_widget
 		def transform_mouse_to_image(widget, mouse_x, mouse_y, delta=False):
 			# get the size of the image window
 			w_width = widget.frame.width
 			w_height = widget.frame.height
+
+			# print("w_width: ", w_width, "w_height: ", w_height)
+			# print("mouse_x: ", mouse_x, "mouse_y: ", mouse_y)
+
+			if OS_STRING == "Linux" or OS_STRING == "Windows":
+				# ignore the menu bar height, Mac OS doesn't have a menu bar
+				mouse_y -= 24
 
 			# use the image size to transform image widget coordinates to image coordinates
 			widget_aspect = w_width / w_height
@@ -556,6 +561,10 @@ class Annotation:
 				image_x = (mouse_x) * self.image_w / i_width
 				image_y = (mouse_y) * self.image_h / i_height
 
+			# clip the image coordinates to the image size
+			image_x = max(0, min(self.image_w - 1, image_x))
+			image_y = max(0, min(self.image_h - 1, image_y))
+
 			return image_x, image_y
 
 		# print(event.type)
@@ -569,6 +578,7 @@ class Annotation:
 			image_x, image_y = transform_mouse_to_image(widget, mouse_x, mouse_y)
 
 			self.poly_selected.add_vertex([image_x, image_y])
+			print("ADDED FIRST VERTEX AT: ", image_x, image_y)
 
 			self.adding_vertex = True
 
@@ -579,26 +589,31 @@ class Annotation:
 			return gui.Widget.EventCallbackResult.HANDLED
 		
 		if event.type == gui.MouseEvent.Type.MOVE and self.adding_poly and self.adding_vertex:
-			print("move")
-			# get the mouse position in the scene
-			mouse_x = event.x
-			mouse_y = event.y
+			# Use frame skipper to reduce the number of times we compute the image coords
+			self.frame_skipper += 1
+			if self.frame_skipper % 4 == 0:
+				# get the mouse position in the scene
+				mouse_x = event.x
+				mouse_y = event.y
+				print("move", mouse_x, mouse_y)
 
-			# get the mouse position in the image
-			image_x, image_y = transform_mouse_to_image(widget, mouse_x, mouse_y)
+				# get the mouse position in the image
+				image_x, image_y = transform_mouse_to_image(widget, mouse_x, mouse_y)
 
-			# render a line from the previous vertex to the current mouse position
-			print(self.poly_selected.vertices[-1][0], self.poly_selected.vertices[-1][1])
-			self.temp_line = [
-				(int(self.poly_selected.vertices[-1][0]),
-				int(self.poly_selected.vertices[-1][1])),
-				(int(image_x),
-				int(image_y))
-			]
+				# render a line from the previous vertex to the current mouse position
+				print(self.poly_selected.vertices[-1][0], self.poly_selected.vertices[-1][1])
+				self.temp_line = [
+					(int(self.poly_selected.vertices[-1][0]),
+					int(self.poly_selected.vertices[-1][1])),
+					(int(image_x),
+					int(image_y))
+				]
+				self.frame_skipper = 0
 
-			self.cw.post_redraw()
-			self.update_props()
-			self.update_image()
+
+				self.cw.post_redraw()
+				self.update_props()
+				self.update_image()
 
 			return gui.Widget.EventCallbackResult.HANDLED
 		
@@ -658,7 +673,7 @@ class Annotation:
 					self.drag_vertex = True
 					self.vertex_index = is_vertex
 					print('vertex drag started')
-					return gui.Widget.EventCallbackResult.CONSUMED #TODO: check if this is the correct return value
+					return gui.Widget.EventCallbackResult.CONSUMED #TODO: check if this is the correct return value: DONE
 			
 			# if not self.drag_edge and self.previous_index != -1:
 			# 	poly = self.polys_to_render[self.previous_index]
@@ -687,31 +702,35 @@ class Annotation:
 		
 		if event.type == gui.MouseEvent.Type.DRAG:
 			# print("drag")
-			# get the mouse position in the scene
-			curr_mouse_x = event.x
-			curr_mouse_y = event.y
+			# Use frame skipper to reduce the number of times we compute the image coords
+			self.frame_skipper += 1
+			if self.frame_skipper % 4 == 0:
+				# get the mouse position in the scene
+				curr_mouse_x = event.x
+				curr_mouse_y = event.y
 
-			# get the mouse position in the image
-			curr_image_x, curr_image_y = transform_mouse_to_image(widget, curr_mouse_x, curr_mouse_y)
+				# get the mouse position in the image
+				curr_image_x, curr_image_y = transform_mouse_to_image(widget, curr_mouse_x, curr_mouse_y)
 
-			if self.drag_vertex:
-				print('dragging vertex')
-				# self.poly_selected.move_vertex(self.vertex_index, image_x, image_y)
-				# self.update_props()
-				# self.update_image()
-				# return gui.Widget.EventCallbackResult.CONSUMED
-				self.poly_selected.move_vertex(self.vertex_index, [curr_image_x, curr_image_y])
+				if self.drag_vertex:
+					print('dragging vertex')
+					# self.poly_selected.move_vertex(self.vertex_index, image_x, image_y)
+					# self.update_props()
+					# self.update_image()
+					# return gui.Widget.EventCallbackResult.CONSUMED
+					self.poly_selected.move_vertex(self.vertex_index, [curr_image_x, curr_image_y])
 
-			
-			# if self.drag_edge:
-			# 	print('dragging edge')
-			# 	self.poly_selected.move_edge(self.vertex_index, image_x, image_y)
-			# 	self.update_props()
-			# 	self.update_image()
-			# 	return gui.Widget.EventCallbackResult.CONSUMED
+				
+				# if self.drag_edge:
+				# 	print('dragging edge')
+				# 	self.poly_selected.move_edge(self.vertex_index, image_x, image_y)
+				# 	self.update_props()
+				# 	self.update_image()
+				# 	return gui.Widget.EventCallbackResult.CONSUMED
 
-			self.update_props()
-			self.update_image()
+				self.update_props()
+				self.update_image()
+				self.frame_skipper = 0
 
 			gui.Widget.EventCallbackResult.HANDLED
 
@@ -1796,7 +1815,7 @@ class Annotation:
 
 	# restarts the program in order to exit
 	def exit_annotation_mode(self):
-		if (self.save_check == 0 and self.temp_boxes != self.old_boxes):
+		if (self.save_check == 0 and self.temp_polys != self.old_polys) or (self.save_check == 0 and self.temp_pred_polys != self.old_pred_polys):
 			dialog = gui.Dialog("Confirm Exit")
 			em = self.cw.theme.font_size
 			margin = gui.Margins(2* em, 1 * em, 2 * em, 2 * em)
@@ -1822,7 +1841,7 @@ class Annotation:
 
 	def confirm_exit(self):
 		# point_cloud.close() must be after Window() in order to work, cw.close doesn't matter
-		Window(sys.argv[2], self.frame_num)
+		Window((self.lct_path, self.output_path, self.pred_path))
 		self.point_cloud.close()
 		self.image_window.close()
 		self.cw.close()
@@ -1970,6 +1989,9 @@ class Annotation:
 		
 		# #If checked, add GT Boxes we should render
 		if self.show_gt is True:
+			# Copy the start and end times
+			self.annotation_start_time = self.temp_polys['metadata']['start_time']
+			self.annotation_end_time = self.temp_polys['metadata']['end_time']
 			# for box in self.temp_boxes['boxes']:
 			for poly in self.temp_polys['polys']:
 				# if box['confidence'] >= self.min_confidence:
@@ -1984,8 +2006,12 @@ class Annotation:
 		# print(len(self.boxes_to_render))
 		print(len(self.polys_to_render))
 
+		
 		#Add Pred Boxes we should render
 		if self.show_pred is True:
+			# Copy the start and end times
+			self.annotation_start_time = self.temp_pred_polys['metadata']['start_time']
+			self.annotation_end_time = self.temp_pred_polys['metadata']['end_time']
 			if self.pred_frames > 0:
 				# for box in self.temp_pred_boxes['boxes']:
 				for poly in self.temp_pred_polys['polys']:

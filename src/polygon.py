@@ -67,10 +67,10 @@ class Polygon:
     def _is_click_on_line(self, click_pos, start_pos, end_pos):
         # if click is within a radius of 3 pixels of the line, return True
         # else return False
-        if self._dist_from_line(click_pos, start_pos, end_pos) < 3:
+        if self._dist_from_line(click_pos, start_pos, end_pos) < 4:
             # check if click is within the line segment
-            if (start_pos[0] - 3 <= click_pos[0] <= end_pos[0] + 3 or end_pos[0] - 3 <= click_pos[0] <= start_pos[0] + 3) \
-            and (start_pos[1] - 3 <= click_pos[1] <= end_pos[1] + 3 or end_pos[1] - 3 <= click_pos[1] <= start_pos[1] + 3):
+            if (start_pos[0] - 4 <= click_pos[0] <= end_pos[0] + 4 or end_pos[0] - 4 <= click_pos[0] <= start_pos[0] + 4) \
+            and (start_pos[1] - 4 <= click_pos[1] <= end_pos[1] + 4 or end_pos[1] - 4 <= click_pos[1] <= start_pos[1] + 4):
                 return True
         return False
         
@@ -83,7 +83,7 @@ class Polygon:
     
     def is_click_on_poly_vertex(self, click_pos):
         for i, vertex in enumerate(self.vertices):
-            if math.sqrt((click_pos[0] - vertex[0])**2 + (click_pos[1] - vertex[1])**2) < 3:
+            if math.sqrt((click_pos[0] - vertex[0])**2 + (click_pos[1] - vertex[1])**2) < 4:
                 return i
         return -1
     
