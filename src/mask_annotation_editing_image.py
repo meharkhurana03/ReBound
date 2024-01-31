@@ -1968,7 +1968,7 @@ class Annotation:
 		try:
 			self.temp_polys = json.load(open(self.output_path))
 		except:
-			self.temp_polys = {"polys": []}
+			self.temp_polys = {"polys": [], }
 		# self.temp_boxes["boxes"].extend(self.propagated_gt_boxes)
 		self.temp_polys["polys"].extend(self.propagated_gt_polys)
 		try:
@@ -1990,8 +1990,12 @@ class Annotation:
 		# #If checked, add GT Boxes we should render
 		if self.show_gt is True:
 			# Copy the start and end times
-			self.annotation_start_time = self.temp_polys['metadata']['start_time']
-			self.annotation_end_time = self.temp_polys['metadata']['end_time']
+			try:
+				self.annotation_start_time = self.temp_polys['metadata']['start_time']
+				self.annotation_end_time = self.temp_polys['metadata']['end_time']
+			except KeyError:
+				self.annotation_start_time = time.time()
+				# self.annotation_end_time = time.time()
 			# for box in self.temp_boxes['boxes']:
 			for poly in self.temp_polys['polys']:
 				# if box['confidence'] >= self.min_confidence:
@@ -2010,8 +2014,12 @@ class Annotation:
 		#Add Pred Boxes we should render
 		if self.show_pred is True:
 			# Copy the start and end times
-			self.annotation_start_time = self.temp_pred_polys['metadata']['start_time']
-			self.annotation_end_time = self.temp_pred_polys['metadata']['end_time']
+			try:
+				self.annotation_start_time = self.temp_pred_polys['metadata']['start_time']
+				self.annotation_end_time = self.temp_pred_polys['metadata']['end_time']
+			except KeyError:
+				self.annotation_start_time = time.time()
+				# self.annotation_end_time = time.time()
 			if self.pred_frames > 0:
 				# for box in self.temp_pred_boxes['boxes']:
 				for poly in self.temp_pred_polys['polys']:

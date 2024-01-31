@@ -1,8 +1,3 @@
-# write a class called Polygon that can accept any number of vertices (x,y) and
-# render a polygon with those points.  The polygon should be closed (i.e. the
-# last vertex should be connected to the first vertex).  The polygon should be
-# able to drawn to a canvas object using the draw method.
-
 import math
 
 class Polygon:
