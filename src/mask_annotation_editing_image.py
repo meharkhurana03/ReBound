@@ -1348,12 +1348,12 @@ class Annotation:
 		for idx, p in enumerate(self.polys_to_render):
 			selected = False
 			if idx == self.previous_index:
-				thickness = 2
+				thickness = 4
 				selected = True
 				if self.temp_line is not None:
-					self.image = cv2.line(self.image, (int(self.temp_line[0][0]), int(self.temp_line[0][1])), (int(self.temp_line[1][0]), int(self.temp_line[1][1])), (255, 255, 255), 1)
+					self.image = cv2.line(self.image, (int(self.temp_line[0][0]), int(self.temp_line[0][1])), (int(self.temp_line[1][0]), int(self.temp_line[1][1])), (255, 255, 255), 2)
 			else:
-				thickness = 1
+				thickness = 2
 				
 			# x1, y1, x2, y2 = b[CORNERS]
 			vertices = p.vertices
@@ -1377,7 +1377,7 @@ class Annotation:
 				# Add annotation label
 				# self.image = cv2.putText(self.image, b[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
 				# self.image = cv2.putText(self.image, p[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
-			self.image = cv2.putText(self.image, p.annotation, (int(p.vertices[0][0]), int(p.vertices[0][1]-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+			self.image = cv2.putText(self.image, p.annotation, (int(p.vertices[0][0]), int(p.vertices[0][1]-2)), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 			
 				# if selected:
 				# 	self.image = cv2.rectangle(self.image, (int(x1-2), int(y1-2)), (int(x1+2), int(y1+2)), (255, 255, 255), 3)
@@ -1392,22 +1392,22 @@ class Annotation:
 		# Post Redraw calls seem to crash the app on windows. Temporary workaround
 		self.image_window.post_redraw()
 
-	def update_cam_pos_pcd(self):
+	# def update_cam_pos_pcd(self):
 
-		# Add Line that indicates current RGB Camera View
-		line = o3d.geometry.LineSet()
-		line.points = o3d.utility.Vector3dVector([[0, 0, 0], [0, 0, 2]])
-		line.lines = o3d.utility.Vector2iVector([[0, 1]])
-		line.colors = o3d.utility.Vector3dVector([[1.0, 0, 0]])
+	# 	# Add Line that indicates current RGB Camera View
+	# 	line = o3d.geometry.LineSet()
+	# 	line.points = o3d.utility.Vector3dVector([[0, 0, 0], [0, 0, 2]])
+	# 	line.lines = o3d.utility.Vector2iVector([[0, 1]])
+	# 	line.colors = o3d.utility.Vector3dVector([[1.0, 0, 0]])
 
-		line.rotate(Quaternion(self.image_extrinsic['rotation']).rotation_matrix, [0, 0, 0])
-		line.translate(self.image_extrinsic['translation'])
+	# 	line.rotate(Quaternion(self.image_extrinsic['rotation']).rotation_matrix, [0, 0, 0])
+	# 	line.translate(self.image_extrinsic['translation'])
 
-		line.rotate(Quaternion(self.frame_extrinsic['rotation']).rotation_matrix, [0, 0, 0])
-		line.translate(self.frame_extrinsic['translation'])
+	# 	line.rotate(Quaternion(self.frame_extrinsic['rotation']).rotation_matrix, [0, 0, 0])
+	# 	line.translate(self.frame_extrinsic['translation'])
 
-		self.scene_widget.scene.add_geometry("RGB Line", line, self.line_mat)
-		self.point_cloud.post_redraw()
+	# 	self.scene_widget.scene.add_geometry("RGB Line", line, self.line_mat)
+	# 	self.point_cloud.post_redraw()
 
 	def on_sensor_select(self, new_val, new_idx):
 		"""This updates the name of the selected rgb sensor after user input
@@ -1842,7 +1842,7 @@ class Annotation:
 	def confirm_exit(self):
 		# point_cloud.close() must be after Window() in order to work, cw.close doesn't matter
 		Window((self.lct_path, self.output_path, self.pred_path))
-		self.point_cloud.close()
+		# self.point_cloud.close()
 		self.image_window.close()
 		self.cw.close()
 
