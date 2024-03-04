@@ -452,10 +452,10 @@ class Window:
 		for idx, p in enumerate(self.polys_to_render):
 			selected = False
 			if idx == self.previous_index:
-				thickness = 2
+				thickness = 4
 				selected = True
 			else:
-				thickness = 1
+				thickness = 2
 				
 			# x1, y1, x2, y2 = b[CORNERS]
 			vertices = p.vertices
@@ -479,7 +479,7 @@ class Window:
 			# Add annotation label
 			# self.image = cv2.putText(self.image, b[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
 			# self.image = cv2.putText(self.image, p[ANNOTATION], (int(x1), int(y1-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
-			self.image = cv2.putText(self.image, p.annotation, (int(p.vertices[0][0]), int(p.vertices[0][1]-2)), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
+			self.image = cv2.putText(self.image, p.annotation, (int(p.vertices[0][0]), int(p.vertices[0][1]-2)), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 		
 			# if selected:
 			# 	self.image = cv2.rectangle(self.image, (int(x1-2), int(y1-2)), (int(x1+2), int(y1+2)), (255, 255, 255), 3)
